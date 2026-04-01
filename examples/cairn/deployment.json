@@ -1,0 +1,65 @@
+{
+  "name": "cairn",
+  "workspaceRoot": "/Users/twaldin/cairn",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 4096,
+    "stateDir": "/Users/twaldin/.cairn/system/opencode",
+    "logDir": "/Users/twaldin/.cairn/system/logs"
+  },
+  "parent": {
+    "agent": "cairn",
+    "sessionScript": "/Users/twaldin/.cairn/system/bin/cairn_session"
+  },
+  "jobs": {
+    "morning": {
+      "prompt": [
+        "Morning briefing. Read WORKING.md + core.md + tasks.md. Run `/Users/twaldin/.cairn/system/bin/read_calendar 3` and `/Users/twaldin/.cairn/system/bin/smart_mail 15`.",
+        "",
+        "Send the briefing to Discord `#daily` using:",
+        "`/Users/twaldin/claudecord/scripts/reply_discord \"...\" --channel 1485084342073163957`",
+        "",
+        "Include:",
+        "- day plan",
+        "- calendar",
+        "- email highlights",
+        "- deadlines",
+        "- portfolio / investing watch items",
+        "- overnight progress",
+        "- any blockers",
+        "",
+        "Then verify `monitor` and `trader` are still alive in tmux session `claudecord`. If either is unhealthy, attempt recovery and post a short alert to `#alerts`."
+      ]
+    },
+    "heartbeat": {
+      "prompt": [
+        "Heartbeat. Check tasks.md, urgent deadlines, and system health. Review whether `monitor` and `trader` in tmux session `claudecord` are alive. If they are stale or dead, attempt recovery.",
+        "",
+        "Run any narrow checks you need for school deadlines, investing watch items, and overnight queue health.",
+        "",
+        "Log a concise heartbeat line to `~/.cairn/logs/heartbeat.log` and only post to Discord if something is urgent or materially changed."
+      ]
+    },
+    "overnight_queue": {
+      "prompt": [
+        "Overnight queue. Read tasks.md and WORKING.md. Pick the highest-value unblocked task that is safe to progress autonomously. Do the work. Avoid noisy Discord posting unless something breaks, you need Tim, or there is a clearly valuable morning update for `#daily`."
+      ]
+    },
+    "market_open": {
+      "prompt": [
+        "Market open investing scan. Run `/Users/twaldin/.cairn/system/bin/stock_monitor_scan open`.",
+        "",
+        "The wrapper computes the triggers deterministically and the stock-monitor worker only formats the summary/message.",
+        "",
+        "Do not invent signals or fetch prices in the main agent."
+      ]
+    },
+    "nightly_reflection": {
+      "prompt": [
+        "Nightly reflection. Review the day's activity, update WORKING.md/core.md/tasks.md as needed, and send a short reflection summary to `#daily` using `/Users/twaldin/claudecord/scripts/reply_discord` with channel `1485084342073163957`.",
+        "",
+        "After the summary, keep context lean and pause for the next scheduled work. Do not break the live Discord path."
+      ]
+    }
+  }
+}

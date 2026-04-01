@@ -1,0 +1,99 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { defaultStateRoot, fetchSessionMessages, inspectAgent, listAgentMetadata, renderMessages } = require("../core/ops")
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [subcommand, target] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || defaultStateRoot()
+  const host = args.host || process.env.OPENFLEET_SERVER_HOST || process.env.OPENCODE_SERVER_HOST || "127.0.0.1"
+  const port = args.port || process.env.OPENFLEET_SERVER_PORT || process.env.OPENCODE_SERVER_PORT || "4096"
+  const serverStateDir = args["server-state-dir"] || process.env.OPENFLEET_SERVER_STATE_DIR || path.join(os.homedir(), ".cairn", "system", "opencode")
+  const serverLogDir = args["server-log-dir"] || process.env.OPENFLEET_SERVER_LOG_DIR || path.join(os.homedir(), ".cairn", "system", "logs")
+  const json = Boolean(args.json)
+  const limit = Number(args.limit || 20)
+
+  switch (subcommand) {
+    case "agents": {
+      const items = listAgentMetadata(stateRoot)
+      return output(items, json)
+    }
+    case "inspect": {
+      if (!target) throw new Error("Usage: ops inspect <agent>")
+      const result = inspectAgent(stateRoot, target, limit)
+      return output(result, json)
+    }
+    case "tail":
+    case "capture": {
+      if (!target) throw new Error(`Usage: ops ${subcommand} <agent>`) 
+      const { metadata } = inspectAgent(stateRoot, target, limit)
+      const messages = await fetchSessionMessages({ metadata, host, port, serverStateDir, serverLogDir })
+      return output({ metadata, messages: renderMessages(messages, limit) }, json)
+    }
+    case "follow": {
+      if (!target) throw new Error("Usage: ops follow <agent>")
+      const { metadata } = inspectAgent(stateRoot, target, limit)
+      let lastCount = 0
+      const tick = async () => {
+        const messages = await fetchSessionMessages({ metadata, host, port, serverStateDir, serverLogDir })
+        const rendered = renderMessages(messages, limit)
+        const delta = rendered.slice(lastCount)
+        lastCount = rendered.length
+        if (delta.length) {
+          output({ metadata, messages: delta }, json)
+        }
+      }
+      await tick()
+      setInterval(() => {
+        tick().catch((error) => {
+          console.error(error.message)
+        })
+      }, 2000)
+      return
+    }
+    default:
+      throw new Error("Usage: ops <agents|inspect|tail|follow|capture> [agent] [--json] [--limit N]")
+  }
+}
+
+function output(value, json) {
+  if (json) {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+    return
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      process.stdout.write(`${item.name}\t${item.agentProfile || "-"}\t${item.sessionID || "-"}\t${item.updated || "-"}\n`)
+    }
+    return
+  }
+
+  if (value.metadata && value.messages) {
+    process.stdout.write(`agent=${value.metadata.name} session=${value.metadata.sessionID || "-"} model=${value.metadata.agentProfile || "-"}\n`)
+    for (const msg of value.messages) {
+      process.stdout.write(`\n[${msg.role || "unknown"}] provider=${msg.provider || "-"} model=${msg.model || "-"} finish=${msg.finish || "-"}\n`)
+      if (msg.text) {
+        process.stdout.write(`${msg.text}\n`)
+      } else {
+        process.stdout.write(`parts=${msg.partTypes.join(",")}\n`)
+      }
+    }
+    return
+  }
+
+  if (value.metadata && value.events) {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+    return
+  }
+
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})

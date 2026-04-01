@@ -1,0 +1,141 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs, ensureOpencodeServer, loadCachedSessionId, request } = require("../lib/opencode")
+const { loadSessionMetadata, saveSessionMetadata } = require("../core/runtime/session")
+const { createEventStore } = require("../core/runtime/events")
+
+const defaultWorkspaceRoot = path.join(os.homedir(), "cairn")
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const name = args._[0]
+  const agentProfile = args.agent || process.env.OPENFLEET_AGENT_PROFILE || "worker"
+  const workspaceRoot = args["workspace-root"] || process.env.OPENFLEET_WORKSPACE_ROOT || defaultWorkspaceRoot
+  const stateDir = args["state-dir"] || process.env.OPENFLEET_STATE_DIR || path.join(os.homedir(), ".openfleet", "system", "opencode", "workers")
+  const canonicalStateDir = args["canonical-state-dir"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || null
+  const host = args.host || process.env.OPENFLEET_SERVER_HOST || process.env.OPENCODE_SERVER_HOST || "127.0.0.1"
+  const port = args.port || process.env.OPENFLEET_SERVER_PORT || process.env.OPENCODE_SERVER_PORT || "4096"
+  const serverStateDir = args["server-state-dir"] || process.env.OPENFLEET_SERVER_STATE_DIR || path.join(os.homedir(), ".openfleet", "system", "opencode")
+  const serverLogDir = args["server-log-dir"] || process.env.OPENFLEET_SERVER_LOG_DIR || path.join(os.homedir(), ".openfleet", "system", "logs")
+  const title = args.title || name
+
+  if (!name) {
+    throw new Error("Usage: worker_session <name> [--id]")
+  }
+
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw new Error(`Invalid worker name: ${name}`)
+  }
+
+  const workerDir = path.join(workspaceRoot, "agents", name)
+  const sessionFile = path.join(stateDir, `${name}.json`)
+  const baseUrl = process.env.OPENCODE_URL || await ensureOpencodeServer({ host, port, stateDir: serverStateDir, logDir: serverLogDir })
+
+  require("fs").mkdirSync(workerDir, { recursive: true })
+
+  const cachedID = loadCachedSessionId(sessionFile) || loadSessionMetadata(stateDir, name)?.sessionID || null
+  if (cachedID) {
+    const cached = await getSession(baseUrl, cachedID, workerDir)
+    if (cached && !cached.time?.archived) {
+      persistSession(stateDir, canonicalStateDir, name, agentProfile, workspaceRoot, cached)
+      appendLifecycleEvent(canonicalStateDir, {
+        type: "session.resumed",
+        session_id: cached.id,
+        agent_id: name,
+        payload: { directory: workerDir, agentProfile },
+      })
+      return emitSession(cached, args.id)
+    }
+  }
+
+  const sessions = await request(baseUrl, "GET", "/session", { directory: workerDir })
+  const existing = sessions
+    .filter((session) => session.directory === workerDir && session.title === title && !session.time?.archived)
+    .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))[0]
+
+  if (existing) {
+    persistSession(stateDir, canonicalStateDir, name, agentProfile, workspaceRoot, existing)
+    appendLifecycleEvent(canonicalStateDir, {
+      type: "session.resumed",
+      session_id: existing.id,
+      agent_id: name,
+      payload: { directory: workerDir, agentProfile },
+    })
+    return emitSession(existing, args.id)
+  }
+
+  const created = await request(baseUrl, "POST", "/session", { directory: workerDir, body: { title } })
+  persistSession(stateDir, canonicalStateDir, name, agentProfile, workspaceRoot, created)
+  appendLifecycleEvent(canonicalStateDir, {
+    type: "session.created",
+    session_id: created.id,
+    agent_id: name,
+    payload: { directory: workerDir, agentProfile },
+  })
+  await initializeSession(baseUrl, created.id, agentProfile, name, workerDir)
+  return emitSession(created, args.id)
+}
+
+async function getSession(baseUrl, sessionID, directory) {
+  try {
+    return await request(baseUrl, "GET", `/session/${sessionID}`, { directory })
+  } catch {
+    return null
+  }
+}
+
+async function initializeSession(baseUrl, sessionID, agentProfile, name, directory) {
+  const prompt = [
+    `Initialize yourself as the managed worker session \`${name}\` for the fleet.`,
+    "You are not the orchestrator.",
+    "Use direct, concise, operational communication.",
+    "Wait for work after acknowledging readiness.",
+  ].join("\n")
+
+  await request(baseUrl, "POST", `/session/${sessionID}/prompt_async`, {
+    directory,
+    body: {
+      agent: agentProfile,
+      parts: [{ type: "text", text: prompt }],
+    },
+  })
+}
+
+function persistSession(stateDir, canonicalStateDir, name, agentProfile, workspaceRoot, session) {
+  const payload = {
+    name,
+    sessionID: session.id,
+    title: session.title,
+    directory: session.directory,
+    workspace: workspaceRoot,
+    agentProfile,
+    created: session.time?.created || null,
+    updated: session.time?.updated || null,
+  }
+
+  saveSessionMetadata(stateDir, payload)
+  if (canonicalStateDir) {
+    saveSessionMetadata(canonicalStateDir, payload)
+  }
+}
+
+function appendLifecycleEvent(canonicalStateDir, event) {
+  if (!canonicalStateDir) return
+  createEventStore(canonicalStateDir).append(event)
+}
+
+function emitSession(session, idOnly) {
+  if (idOnly) {
+    process.stdout.write(`${session.id}\n`)
+    return
+  }
+
+  process.stdout.write(`${JSON.stringify(session, null, 2)}\n`)
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})

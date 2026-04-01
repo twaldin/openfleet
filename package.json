@@ -1,0 +1,7 @@
+{
+  "name": "openfleet",
+  "private": true,
+  "type": "commonjs",
+  "description": "Reusable OpenFleet runtime layer for session-based agent control.",
+  "license": "MIT"
+}

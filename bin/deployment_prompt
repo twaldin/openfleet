@@ -1,0 +1,24 @@
+#!/usr/bin/env node
+
+const { loadDeploymentConfig, readPromptFromArgs } = require("../core/deployment")
+const { promptDeployment } = require("../core/runtime/session")
+const { parseArgs } = require("../lib/opencode")
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const configPath = args.deployment || args.config
+  const prompt = readPromptFromArgs(args._)
+
+  if (!configPath || !prompt) {
+    throw new Error("Usage: deployment_prompt --deployment <config> <prompt>")
+  }
+
+  const deployment = loadDeploymentConfig(configPath)
+  await promptDeployment(deployment, prompt)
+  process.stdout.write("Queued deployment prompt\n")
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})

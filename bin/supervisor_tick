@@ -1,0 +1,27 @@
+#!/usr/bin/env node
+
+const { getDeploymentJob, loadDeploymentConfig } = require("../core/deployment")
+const { promptDeployment } = require("../core/runtime/session")
+const { parseArgs } = require("../lib/opencode")
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const configPath = args.deployment || args.config
+  const jobName = args.job || args._[0]
+
+  if (!configPath || !jobName) {
+    throw new Error("Usage: supervisor_tick --deployment <config> --job <name>")
+  }
+
+  const deployment = loadDeploymentConfig(configPath)
+  const job = getDeploymentJob(deployment, jobName)
+  const prompt = job.supervisorPrompt || job.prompt
+
+  await promptDeployment(deployment, prompt)
+  process.stdout.write(`Queued ${jobName}\n`)
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})

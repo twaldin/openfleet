@@ -1,0 +1,56 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { execFileSync } = require("child_process")
+const { ensureOpencodeServer, parseArgs, request, resolveSender } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const message = args._.join(" ").trim()
+  const workspaceRoot = args["workspace-root"] || process.env.OPENFLEET_WORKSPACE_ROOT || path.join(os.homedir(), "cairn")
+  const stateDir = args["state-dir"] || process.env.OPENFLEET_WORKER_STATE_DIR || path.join(os.homedir(), ".openfleet", "system", "opencode", "workers")
+  const canonicalStateDir = args["canonical-state-dir"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || null
+  const sessionScript = args["session-script"] || process.env.OPENFLEET_SESSION_SCRIPT || path.join(__dirname, "..", "..", ".cairn", "system", "bin", "cairn_session")
+  const parentAgent = args["parent-agent"] || process.env.OPENFLEET_PARENT_AGENT || "cairn"
+  const host = args.host || process.env.OPENFLEET_SERVER_HOST || process.env.OPENCODE_SERVER_HOST || "127.0.0.1"
+  const port = args.port || process.env.OPENFLEET_SERVER_PORT || process.env.OPENCODE_SERVER_PORT || "4096"
+  const serverStateDir = args["server-state-dir"] || process.env.OPENFLEET_SERVER_STATE_DIR || path.join(os.homedir(), ".openfleet", "system", "opencode")
+  const serverLogDir = args["server-log-dir"] || process.env.OPENFLEET_SERVER_LOG_DIR || path.join(os.homedir(), ".openfleet", "system", "logs")
+
+  if (!message) {
+    throw new Error("Usage: message_parent <message>")
+  }
+
+  const baseUrl = process.env.OPENCODE_URL || await ensureOpencodeServer({ host, port, stateDir: serverStateDir, logDir: serverLogDir })
+  const sessionID = execFileSync(sessionScript, ["--id"], { encoding: "utf8" }).trim()
+  const sender = resolveSender({ workspaceRoot, stateDir }).toUpperCase()
+
+  await request(baseUrl, "POST", `/session/${sessionID}/prompt_async`, {
+    directory: workspaceRoot,
+    body: {
+      agent: parentAgent,
+      parts: [{ type: "text", text: `[${sender}]: ${message}` }],
+    },
+  })
+
+  if (canonicalStateDir) {
+    createEventStore(canonicalStateDir).append({
+      type: "message.created",
+      session_id: sessionID,
+      agent_id: sender.toLowerCase(),
+      payload: {
+        direction: "worker_to_parent",
+        text: `[${sender}]: ${message}`,
+      },
+    })
+  }
+
+  process.stdout.write("Sent to parent\n")
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})
