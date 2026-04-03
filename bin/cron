@@ -1,0 +1,170 @@
+#!/usr/bin/env node
+// OpenFleet cron scheduler — fires scheduled tasks at the right times
+const { execFileSync, execFile } = require("child_process")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const CRON_STATE = path.join(STATE_ROOT, "cron-state.json")
+const BIN = __dirname
+
+// Schedule definition — cron-like but simpler
+// { id, schedule: { hour, minute, days? }, action: fn }
+// days: 0=Sun..6=Sat, undefined=every day
+const WEEKDAYS = [1, 2, 3, 4, 5]
+
+function buildSchedule() {
+  return [
+    {
+      id: "stock-monitor-spawn",
+      hour: 9, minute: 25, days: WEEKDAYS,
+      action: () => {
+        log("Spawning stock-monitor for market hours")
+        run("node", [path.join(BIN, "worker_session"), "stock-monitor", "--agent", "stock-monitor", "--canonical-state-dir", STATE_ROOT])
+        const scanScript = process.env.OPENFLEET_STOCK_SCAN || path.join(os.homedir(), ".cairn", "system", "bin", "stock_monitor_scan")
+        if (fs.existsSync(scanScript)) {
+          run("node", [path.join(BIN, "message_agent"), "stock-monitor", "--agent", "stock-monitor", "--canonical-state-dir", STATE_ROOT,
+            `Market open. Run your opening scan and post results to #investing via: node ${path.join(BIN, "remote")} discord post --channel stock-monitor --message "<summary>"`])
+        }
+      },
+    },
+    {
+      id: "stock-monitor-kill",
+      hour: 16, minute: 5, days: WEEKDAYS,
+      action: () => {
+        log("Market closed — stock-monitor goes dormant")
+        // Don't kill the session, just let it know market is closed
+        try {
+          run("node", [path.join(BIN, "message_agent"), "stock-monitor", "--agent", "stock-monitor", "--canonical-state-dir", STATE_ROOT,
+            "Market closed. Summarize the day's activity, update your state file, then go idle until next market open."])
+        } catch {}
+      },
+    },
+    {
+      id: "monitor-health-check",
+      hour: -1, intervalMinutes: 120, // every 2 hours
+      action: () => {
+        log("Monitor health check")
+        try {
+          run("node", [path.join(BIN, "message_agent"), "monitor", "--agent", "monitor", "--canonical-state-dir", STATE_ROOT,
+            "Scheduled health check. Run your VPS probe, assess health, and post to #monitor if anything changed. Message the orchestrator if you find issues that need a decision."])
+        } catch (e) {
+          log(`Monitor check failed: ${e.message}`)
+        }
+      },
+    },
+    {
+      id: "trader-scan",
+      hour: 9, minute: 30, days: WEEKDAYS,
+      action: () => {
+        log("Trader market scan")
+        try {
+          run("node", [path.join(BIN, "message_agent"), "trader", "--agent", "trader", "--canonical-state-dir", STATE_ROOT,
+            "Scheduled market scan. Check your open positions for P&L changes, scan for new opportunities, and post your assessment to #trader. Message the orchestrator for any trade recommendations that need Tim's approval."])
+        } catch (e) {
+          log(`Trader scan failed: ${e.message}`)
+        }
+      },
+    },
+    {
+      id: "heartbeat",
+      hour: -1, intervalMinutes: 60,
+      action: () => {
+        log("Heartbeat — prompting orchestrator")
+        try {
+          run("node", [path.join(BIN, "send"), "--to-parent", "--sender", "cron", "--message",
+            "[HEARTBEAT] Hourly check. Review: tasks.md, agent health (node ~/openfleet/bin/ops agents), urgent deadlines, email (smart_mail 15). Log to heartbeat.log. Only post to Discord if something material changed."])
+        } catch (e) {
+          log(`Heartbeat failed: ${e.message}`)
+        }
+      },
+    },
+  ]
+}
+
+function loadCronState() {
+  try { return JSON.parse(fs.readFileSync(CRON_STATE, "utf8")) } catch { return {} }
+}
+
+function saveCronState(state) {
+  fs.writeFileSync(CRON_STATE, JSON.stringify(state, null, 2))
+}
+
+function shouldFire(job, now, state) {
+  const lastFired = state[job.id] ? new Date(state[job.id]).getTime() : 0
+
+  // Interval-based jobs
+  if (job.intervalMinutes) {
+    return (now.getTime() - lastFired) >= job.intervalMinutes * 60 * 1000
+  }
+
+  // Time-of-day jobs
+  if (job.hour >= 0) {
+    const h = now.getHours()
+    const m = now.getMinutes()
+    if (h !== job.hour || Math.abs(m - job.minute) > 2) return false
+    if (job.days && !job.days.includes(now.getDay())) return false
+    // Don't fire twice in the same window
+    const windowStart = new Date(now)
+    windowStart.setMinutes(job.minute - 2, 0, 0)
+    return lastFired < windowStart.getTime()
+  }
+
+  return false
+}
+
+function tick() {
+  const now = new Date()
+  const state = loadCronState()
+  const schedule = buildSchedule()
+
+  for (const job of schedule) {
+    if (shouldFire(job, now, state)) {
+      try {
+        job.action()
+        state[job.id] = now.toISOString()
+      } catch (e) {
+        log(`Cron ${job.id} failed: ${e.message}`)
+      }
+    }
+  }
+
+  saveCronState(state)
+}
+
+function run(cmd, args) {
+  execFileSync(cmd, args, { stdio: "pipe", encoding: "utf8", timeout: 30000 })
+}
+
+function log(msg) {
+  process.stderr.write(`[cron ${new Date().toISOString().slice(11, 19)}] ${msg}\n`)
+}
+
+// --- Main ---
+
+const args = process.argv.slice(2)
+if (args.includes("--once")) {
+  tick()
+  process.exit(0)
+}
+
+if (args.includes("--list")) {
+  const state = loadCronState()
+  const schedule = buildSchedule()
+  schedule.forEach(j => {
+    const last = state[j.id] || "never"
+    const sched = j.intervalMinutes ? `every ${j.intervalMinutes}m` : `${j.hour}:${String(j.minute).padStart(2, "0")}${j.days ? " M-F" : ""}`
+    console.log(`${j.id.padEnd(25)} ${sched.padEnd(15)} last: ${last}`)
+  })
+  process.exit(0)
+}
+
+// Run every 60 seconds
+log("Cron scheduler started")
+tick()
+setInterval(tick, 60_000)
+
+// Keep alive
+process.on("SIGINT", () => process.exit(0))
+process.on("SIGTERM", () => process.exit(0))

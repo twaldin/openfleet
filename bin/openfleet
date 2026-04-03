@@ -37,6 +37,12 @@ const commands = {
   profile: (args) => run("profile", args),
   profiles: () => run("profile", ["list"]),
 
+  // Fleet lifecycle
+  cron: (args) => run("cron", args),
+  lifecycle: (args) => run("agent-lifecycle", args),
+  respawn: (args) => run("agent-lifecycle", ["respawn", ...args]),
+  compact: (args) => run("agent-lifecycle", ["compact", ...args]),
+
   // Maintenance
   maintenance: (args) => run("maintenance-loop", args),
   stalled: (args) => run("stalled-jobs", args),

@@ -1,0 +1,181 @@
+#!/usr/bin/env node
+// Agent lifecycle management — compact, check health, respawn dormant persistent agents
+const { execFileSync } = require("child_process")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { loadRegistry, saveRegistry } = require("../core/runtime/registry")
+const { createEventStore } = require("../core/runtime/events")
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const BIN = __dirname
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const command = args._[0]
+
+  if (command === "check") return checkAll()
+  if (command === "respawn") return respawnDormant(args)
+  if (command === "compact") return compactAgent(args)
+  if (command === "status") return showStatus()
+
+  console.error("Usage: agent-lifecycle <check|respawn|compact|status>")
+  console.error("  check     — check health of all registered agents")
+  console.error("  respawn   — respawn dormant persistent agents")
+  console.error("  compact   — tell an agent to compact its context")
+  console.error("  status    — show detailed agent status")
+  process.exit(1)
+}
+
+function checkAll() {
+  const reg = loadRegistry(STATE_ROOT)
+  const events = createEventStore(STATE_ROOT)
+  const results = []
+
+  for (const session of Object.values(reg.sessions)) {
+    if (!session.name) continue
+    const alive = isAlive(session)
+    const role = session.role || "ephemeral"
+    results.push({ name: session.name, alive, role, harness: session.harness || "?" })
+
+    if (!alive && role === "persistent") {
+      console.log(`DORMANT persistent agent: ${session.name} (${session.harness}/${session.model})`)
+    }
+  }
+
+  const aliveCount = results.filter(r => r.alive).length
+  const dormantPersistent = results.filter(r => !r.alive && r.role === "persistent").length
+  console.log(`\nFleet: ${aliveCount} alive, ${dormantPersistent} dormant persistent, ${results.length} total`)
+
+  if (dormantPersistent > 0) {
+    console.log("Run 'agent-lifecycle respawn' to bring persistent agents back online")
+  }
+}
+
+function respawnDormant(args) {
+  const specific = args._[1] // optional: respawn a specific agent
+  const reg = loadRegistry(STATE_ROOT)
+
+  for (const session of Object.values(reg.sessions)) {
+    if (!session.name) continue
+    if (session.role !== "persistent") continue
+    if (specific && session.name !== specific) continue
+    if (isAlive(session)) {
+      console.log(`${session.name}: already alive, skipping`)
+      continue
+    }
+
+    console.log(`Respawning ${session.name} (${session.harness}/${session.model})...`)
+
+    try {
+      // Create/resume the opencode session
+      const sessionId = execFileSync("node", [
+        path.join(BIN, "worker_session"), session.name,
+        "--agent", session.name,
+        "--canonical-state-dir", STATE_ROOT,
+        "--id",
+      ], { encoding: "utf8", timeout: 15000 }).trim()
+
+      // Send the persistent agent its re-initialization prompt
+      const stateFile = path.join(session.directory || "", "state.md")
+      const coreFile = path.join(session.directory || "", "core.md")
+
+      const prompt = [
+        `You are the persistent ${session.name} agent. You have been respawned.`,
+        `Read your state: ${fs.existsSync(stateFile) ? stateFile : "(no state file)"}`,
+        `Read your core identity: ${fs.existsSync(coreFile) ? coreFile : "(no core file)"}`,
+        `Read your openfleet instructions in your .opencode/agents/ directory.`,
+        `Resume your normal operations. Post a status update to your Discord channel.`,
+      ].join("\n")
+
+      execFileSync("node", [
+        path.join(BIN, "message_agent"), session.name,
+        "--agent", session.name,
+        "--canonical-state-dir", STATE_ROOT,
+        prompt,
+      ], { encoding: "utf8", timeout: 15000 })
+
+      // Update registry
+      session.updated_at = new Date().toISOString()
+      session.session_id = sessionId
+      saveRegistry(STATE_ROOT, reg)
+
+      createEventStore(STATE_ROOT).append({
+        type: "agent.respawned",
+        agent_id: session.name,
+        payload: { session_id: sessionId, harness: session.harness, model: session.model },
+      })
+
+      console.log(`${session.name}: respawned (${sessionId.slice(0, 15)})`)
+    } catch (e) {
+      console.error(`${session.name}: respawn failed — ${e.message}`)
+    }
+  }
+}
+
+function compactAgent(args) {
+  const name = args._[1]
+  if (!name) {
+    console.error("Usage: agent-lifecycle compact <agent-name>")
+    process.exit(1)
+  }
+
+  console.log(`Telling ${name} to compact...`)
+  try {
+    execFileSync("node", [
+      path.join(BIN, "message_agent"), name,
+      "--agent", name,
+      "--canonical-state-dir", STATE_ROOT,
+      "COMPACT: Save your current state to your state.md file, summarize what you were working on, then acknowledge compaction is complete. After saving state, you can be safely restarted.",
+    ], { encoding: "utf8", timeout: 15000 })
+    console.log(`Compact message sent to ${name}`)
+  } catch (e) {
+    console.error(`Failed to send compact to ${name}: ${e.message}`)
+  }
+}
+
+function showStatus() {
+  const reg = loadRegistry(STATE_ROOT)
+  console.log("Agent".padEnd(20), "Harness".padEnd(12), "Model".padEnd(15), "Role".padEnd(12), "Status")
+  console.log("-".repeat(70))
+
+  for (const session of Object.values(reg.sessions)) {
+    if (!session.name) continue
+    const alive = isAlive(session)
+    const status = alive ? "🟢 alive" : session.role === "persistent" ? "⚫ dormant" : "💀 dead"
+    console.log(
+      session.name.padEnd(20),
+      (session.harness || "?").padEnd(12),
+      (session.model || "?").padEnd(15),
+      (session.role || "ephemeral").padEnd(12),
+      status,
+    )
+  }
+}
+
+function isAlive(session) {
+  // Check tmux window
+  if (session.tmux_session && session.tmux_window) {
+    try {
+      execFileSync("tmux", ["has-session", "-t", session.tmux_session], { stdio: "ignore" })
+      const wins = execFileSync("tmux", ["list-windows", "-t", session.tmux_session, "-F", "#{window_name}"], { encoding: "utf8" })
+      if (wins.split("\n").includes(session.tmux_window)) return true
+    } catch {}
+  }
+
+  // Check opencode session freshness
+  if (session.session_id && session.updated_at) {
+    const age = Date.now() - new Date(session.updated_at).getTime()
+    if (age < 15 * 60 * 1000) return true
+  }
+
+  return false
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(e.message)
+  process.exit(1)
+}
