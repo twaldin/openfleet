@@ -68,6 +68,22 @@ try {
   deploymentRouting = dep.routing || {}
 } catch {}
 
+// ---- Channel helpers -------------------------------------------------------
+
+// Map agent names to their Discord channel IDs (from deployment routing)
+const agentToChannelId = {}
+for (const [agent, binding] of Object.entries(deploymentRouting.persistent_agent_channels || {})) {
+  const channelName = binding.replace("channel://", "")
+  if (config.channels?.[channelName]) {
+    agentToChannelId[agent] = config.channels[channelName]
+  }
+}
+
+function agentChannelMention(agentName) {
+  const id = agentToChannelId[agentName]
+  return id ? ` <#${id}>` : ""
+}
+
 // ---- Agent routing ---------------------------------------------------------
 
 function resolveAgentForChannel(channelId) {
@@ -170,12 +186,19 @@ async function downloadAttachments(msg) {
     const filename = `${msg.id}-${att.id}.${ext}`
     const filepath = path.join(ATTACHMENT_DIR, filename)
     try {
-      const res = await fetch(att.url)
-      const buf = Buffer.from(await res.arrayBuffer())
-      writeFileSync(filepath, buf)
-      paths.push(filepath)
+      // Use curl for reliable download — fetch can have issues with Discord CDN
+      execFileSync("curl", ["-sS", "-L", "-o", filepath, "--max-time", "15", att.url], { stdio: "pipe" })
+      const stat = require("fs").statSync(filepath)
+      if (stat.size > 0) {
+        paths.push(filepath)
+        process.stderr.write(`openfleet-gateway: saved attachment ${filepath} (${stat.size} bytes)\n`)
+      } else {
+        process.stderr.write(`openfleet-gateway: attachment empty, trying proxyURL\n`)
+        execFileSync("curl", ["-sS", "-L", "-o", filepath, "--max-time", "15", att.proxyURL || att.url], { stdio: "pipe" })
+        paths.push(filepath)
+      }
     } catch (err) {
-      process.stderr.write(`openfleet-gateway: attachment download failed: ${err}\n`)
+      process.stderr.write(`openfleet-gateway: attachment download failed: ${err.message}\n`)
     }
   }
   return paths
@@ -539,18 +562,33 @@ client.on("messageCreate", (msg) => {
     sendToAgent(agentName, msg)
     ack()
   } else {
-    // Route to orchestrator/parent
-    const text = msg.content || "(empty)"
+    // Route to orchestrator/parent — handle attachments same as agent path
     const author = msg.author.username
-    const formatted = `[Discord #${channelName || channelId}] ${author}: ${text}`
-    execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", formatted], (err) => {
-      if (err) {
-        process.stderr.write(`openfleet-gateway: send to parent failed: ${err.message}\n`)
-        msg.react("❌").catch(() => {})
-      } else {
-        ack()
-      }
-    })
+    const prefix = `[Discord #${channelName || channelId}] ${author}: `
+
+    if (msg.attachments.size > 0) {
+      downloadAttachments(msg).then(paths => {
+        const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"])
+        const parts = []
+        if (msg.content) parts.push(msg.content)
+        for (const p of paths) {
+          const ext = p.split(".").pop().toLowerCase()
+          const label = IMAGE_EXTS.has(ext) ? "Image" : "File"
+          parts.push(`[${label}: ${p}]`)
+        }
+        const formatted = prefix + (parts.join("\n") || "(attachment)")
+        execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", formatted], (err) => {
+          if (err) { msg.react("❌").catch(() => {}); process.stderr.write(`openfleet-gateway: send to parent failed: ${err.message}\n`) }
+          else ack()
+        })
+      })
+    } else {
+      const formatted = prefix + (msg.content || "(empty)")
+      execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", formatted], (err) => {
+        if (err) { msg.react("❌").catch(() => {}); process.stderr.write(`openfleet-gateway: send to parent failed: ${err.message}\n`) }
+        else ack()
+      })
+    }
   }
 })
 
@@ -648,24 +686,41 @@ function buildStatusEmbed() {
   if (alive.length > 0) {
     const lines = alive.map(a => {
       const icon = a.status === "working" ? "🔵" : "🟢"
+      const ch = agentChannelMention(a.name)
       const task = a.currentTask ? ` — *${a.currentTask.slice(0, 40)}*` : ""
-      return `${icon} **${a.name}** — ${a.harness}/${a.model}${task}`
+      return `${icon} **${a.name}**${ch} — ${a.harness}/${a.model}${task}`
     })
     embed.addFields({ name: `Active Agents (${alive.length})`, value: lines.join("\n"), inline: false })
   }
 
   // Dormant agents (have sessions but not running)
   if (dormant.length > 0) {
-    const lines = dormant.slice(0, 8).map(a => `⚫ **${a.name}** — ${a.harness}/${a.model}`)
+    const lines = dormant.slice(0, 8).map(a => {
+      const ch = agentChannelMention(a.name)
+      return `⚫ **${a.name}**${ch} — ${a.harness}/${a.model}`
+    })
     embed.addFields({ name: `Dormant (${dormant.length})`, value: lines.join("\n"), inline: false })
   }
 
-  // Summary
+  // Summary row
   embed.addFields(
     { name: "Tasks", value: String(taskCount), inline: true },
     { name: "Blockers", value: String(blockerCount), inline: true },
     { name: "Gateway", value: "🟢 Online", inline: true },
   )
+
+  // Cron schedule
+  const cronLines = [
+    "⏰ `07:27` Morning briefing → #daily",
+    "⏰ `07-22:17` Heartbeat (hourly)",
+    "⏰ `09:25 M-F` Spawn stock-monitor",
+    "⏰ `16:05 M-F` Kill stock-monitor",
+    "⏰ `21:03` Habit nudge",
+    "⏰ `00:02` Nightly reflection + compaction",
+    "⏰ `05:42` Overnight news digest",
+    "⏰ `20:00 Sun` Weekly review",
+  ]
+  embed.addFields({ name: "Scheduled", value: cronLines.join("\n"), inline: false })
 
   embed.setFooter({ text: "Auto-updates every 60s • Dead agents hidden" })
   embed.setTimestamp()

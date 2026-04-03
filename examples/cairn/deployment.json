@@ -18,23 +18,31 @@
     "server_architecture": {
       "server_name": "OpenFleet",
       "status_channel": "channel://fleet-status",
-      "blocker_channel": "channel://fleet-blockers",
-      "approval_channel": "channel://fleet-approvals",
+      "tasks_channel": "channel://tasks",
       "categories": [
         {
           "name": "control-plane",
           "channels": [
             "channel://cairn",
             "channel://fleet-status",
-            "channel://fleet-blockers",
-            "channel://fleet-approvals"
+            "channel://tasks",
+            "channel://alerts"
           ]
         },
         {
-          "name": "workers",
+          "name": "agents",
           "channels": [
             "channel://code-status",
-            "channel://alerts",
+            "channel://evals",
+            "channel://monitor",
+            "channel://stock-monitor",
+            "channel://trader"
+          ]
+        },
+        {
+          "name": "reports",
+          "channels": [
+            "channel://daily",
             "channel://investing"
           ]
         }
@@ -42,9 +50,11 @@
     },
     "persistent_agent_channels": {
       "coder": "channel://code-status",
-      "monitor": "channel://alerts",
-      "stock-monitor": "channel://investing",
-      "evaluator": "channel://code-status"
+      "coder-gpt": "channel://code-status",
+      "evaluator": "channel://evals",
+      "monitor": "channel://monitor",
+      "stock-monitor": "channel://stock-monitor",
+      "trader": "channel://trader"
     }
   },
   "jobs": {
