@@ -276,8 +276,8 @@ async function pollPermissions() {
       })
   } catch { return }
 
-  // Windows to skip — orchestrator + gateway don't need permission prompts in Discord
-  const SKIP_WINDOWS = new Set(["gateway", "cairn"])
+  // Only skip gateway's own window — all agents including cairn get permission prompts
+  const SKIP_WINDOWS = new Set(["gateway"])
 
   for (const { index: winIndex, name: windowName } of windowEntries) {
     if (pendingPrompts.has(windowName)) continue

@@ -1,15 +1,18 @@
 {
   "name": "cairn",
-  "workspaceRoot": "/Users/twaldin/cairn",
+  "_comment": "Replace with your paths and environment-specific values.",
+  "workspaceRoot": "$HOME/path/to/cairn",
   "server": {
     "host": "127.0.0.1",
     "port": 4096,
-    "stateDir": "/Users/twaldin/.cairn/system/opencode",
-    "logDir": "/Users/twaldin/.cairn/system/logs"
+    "stateDir": "$HOME/.cairn/system/opencode",
+    "logDir": "$HOME/.cairn/system/logs",
+    "_comment": "Replace with your paths."
   },
   "parent": {
     "agent": "cairn",
-    "sessionScript": "/Users/twaldin/.cairn/system/bin/cairn_session"
+    "sessionScript": "$HOME/.cairn/system/bin/your_session_script",
+    "_comment": "Replace with your session wrapper path."
   },
   "routing": {
     "assistant_channel": "channel://cairn",
@@ -61,10 +64,12 @@
   "jobs": {
     "morning": {
       "prompt": [
-        "Morning briefing. Read WORKING.md + core.md + tasks.md. Run `/Users/twaldin/.cairn/system/bin/read_calendar 3` and `/Users/twaldin/.cairn/system/bin/smart_mail 15`.",
+        "Morning briefing. Read WORKING.md + core.md + tasks.md. Run your local calendar and mail helper scripts.",
+        "Replace with your paths, for example: `$HOME/.cairn/system/bin/read_calendar 3` and `$HOME/.cairn/system/bin/smart_mail 15`.",
         "",
         "Send the briefing to Discord `#daily` using:",
-        "`node /Users/twaldin/openfleet/bin/remote discord post --channel 1489486461551120505 --message \"...\"`",
+        "`node $HOME/openfleet/bin/remote discord post --channel YOUR_DISCORD_CHANNEL_ID --message \"...\"`",
+        "Replace with your paths and channel IDs.",
         "",
         "Include:",
         "- day plan",
@@ -89,12 +94,13 @@
     },
     "overnight_queue": {
       "prompt": [
-        "Overnight queue. Read tasks.md and WORKING.md. Pick the highest-value unblocked task that is safe to progress autonomously. Do the work. Avoid noisy Discord posting unless something breaks, you need Tim, or there is a clearly valuable morning update for `#daily`."
+        "Overnight queue. Read tasks.md and WORKING.md. Pick the highest-value unblocked task that is safe to progress autonomously. Do the work. Avoid noisy Discord posting unless something breaks, you need human input, or there is a clearly valuable morning update for `#daily`."
       ]
     },
     "market_open": {
       "prompt": [
-        "Market open investing scan. Run `/Users/twaldin/.cairn/system/bin/stock_monitor_scan open`.",
+        "Market open investing scan. Run your local stock monitor wrapper for the open session.",
+        "Replace with your path, for example: `$HOME/.cairn/system/bin/stock_monitor_scan open`.",
         "",
         "The wrapper computes the triggers deterministically and the stock-monitor worker only formats the summary/message.",
         "",
@@ -103,7 +109,8 @@
     },
     "nightly_reflection": {
       "prompt": [
-        "Nightly reflection. Review the day's activity, update WORKING.md/core.md/tasks.md as needed, and send a short reflection summary to `#daily` using `node /Users/twaldin/openfleet/bin/remote discord post --channel 1489486461551120505 --message \"...\"`.",
+        "Nightly reflection. Review the day's activity, update WORKING.md/core.md/tasks.md as needed, and send a short reflection summary to `#daily` using `node $HOME/openfleet/bin/remote discord post --channel YOUR_DISCORD_CHANNEL_ID --message \"...\"`.",
+        "Replace with your paths and channel IDs.",
         "",
         "After the summary, keep context lean and pause for the next scheduled work. Do not break the live Discord path."
       ]
