@@ -1,0 +1,377 @@
+#!/usr/bin/env node
+// openfleet init — interactive setup wizard for new deployments
+const readline = require("readline")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+
+const OPENFLEET_DIR = path.join(os.homedir(), ".openfleet")
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function createRL() {
+  return readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+}
+
+function ask(rl, question, defaultValue) {
+  const suffix = defaultValue != null ? ` [${defaultValue}]` : ""
+  return new Promise((resolve) => {
+    rl.question(`${question}${suffix}: `, (answer) => {
+      const trimmed = answer.trim()
+      resolve(trimmed || (defaultValue != null ? String(defaultValue) : ""))
+    })
+  })
+}
+
+function askSecret(rl, question) {
+  return new Promise((resolve) => {
+    process.stdout.write(`${question}: `)
+    const stdin = process.stdin
+    const wasRaw = stdin.isRaw
+    if (stdin.isTTY) stdin.setRawMode(true)
+
+    let buf = ""
+    function onData(ch) {
+      const c = ch.toString()
+      if (c === "\n" || c === "\r") {
+        stdin.removeListener("data", onData)
+        if (stdin.isTTY && !wasRaw) stdin.setRawMode(false)
+        process.stdout.write("\n")
+        resolve(buf)
+      } else if (c === "\u0003") {
+        // ctrl-c
+        process.exit(1)
+      } else if (c === "\u007f" || c === "\b") {
+        buf = buf.slice(0, -1)
+      } else {
+        buf += c
+      }
+    }
+    stdin.on("data", onData)
+  })
+}
+
+async function askChoice(rl, question, choices, defaultValue) {
+  const choiceStr = choices
+    .map((c) => (c === defaultValue ? `[${c}]` : c))
+    .join(" / ")
+  const answer = await ask(rl, `${question} (${choiceStr})`, null)
+  if (!answer) return defaultValue
+  const match = choices.find((c) => c.toLowerCase().startsWith(answer.toLowerCase()))
+  return match || defaultValue
+}
+
+async function askYN(rl, question, defaultYes = true) {
+  const hint = defaultYes ? "[Y/n]" : "[y/N]"
+  const answer = await ask(rl, `${question} ${hint}`, null)
+  if (!answer) return defaultYes
+  return answer.toLowerCase().startsWith("y")
+}
+
+function writeJSON(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n")
+}
+
+function defaultModel(harness) {
+  switch (harness) {
+    case "claude-code":
+      return "opus-4.6"
+    case "codex":
+      return "gpt-5.4"
+    case "opencode":
+      return "gpt-5.4"
+    default:
+      return "opus-4.6"
+  }
+}
+
+function defaultProvider(harness) {
+  switch (harness) {
+    case "claude-code":
+      return "anthropic"
+    case "codex":
+      return "openai"
+    case "opencode":
+      return "openai"
+    default:
+      return "anthropic"
+  }
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+async function main() {
+  // --help shortcut
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(`openfleet init — interactive setup wizard
+
+Creates the ~/.openfleet directory and generates:
+  - deployment.json   Fleet deployment configuration
+  - profiles.json     Runtime profile definitions
+  - orchestrator.json Orchestrator session config
+  - discord.json      Discord bot config (optional)
+
+Usage:
+  openfleet init
+  node bin/init
+
+Options:
+  --help, -h    Show this help message
+`)
+    process.exit(0)
+  }
+
+  const rl = createRL()
+
+  try {
+    await runWizard(rl)
+  } finally {
+    rl.close()
+  }
+}
+
+async function runWizard(rl) {
+  console.log()
+  console.log("╔══════════════════════════════════════════════════════════╗")
+  console.log("║                    openfleet init                       ║")
+  console.log("║                                                        ║")
+  console.log("║  Harness-agnostic agent orchestration for AI CLI tools. ║")
+  console.log("║  Manage fleets of Claude Code, Codex, and OpenCode     ║")
+  console.log("║  agents from a single control plane.                   ║")
+  console.log("╚══════════════════════════════════════════════════════════╝")
+  console.log()
+
+  // ── 1. Create ~/.openfleet ──────────────────────────────────────────────
+
+  if (fs.existsSync(OPENFLEET_DIR)) {
+    console.log(`Config directory exists: ${OPENFLEET_DIR}`)
+    const overwrite = await askYN(rl, "Overwrite existing config files?", false)
+    if (!overwrite) {
+      console.log("Aborting. Existing config preserved.")
+      return
+    }
+  } else {
+    fs.mkdirSync(OPENFLEET_DIR, { recursive: true })
+    console.log(`Created ${OPENFLEET_DIR}`)
+  }
+
+  console.log()
+
+  // ── 2. Deployment name ──────────────────────────────────────────────────
+
+  const deploymentName = await ask(rl, "Deployment name", path.basename(os.homedir()))
+
+  // ── 3. Discord ──────────────────────────────────────────────────────────
+
+  console.log()
+  console.log("── Discord Integration ──")
+  console.log("OpenFleet can route agent messages through Discord.")
+  console.log("You can skip this and configure it later.")
+  console.log()
+
+  let discordConfig = null
+  const wantDiscord = await askYN(rl, "Set up Discord now?", false)
+
+  if (wantDiscord) {
+    const token = await askSecret(rl, "Bot token (hidden)")
+    if (!token) {
+      console.log("No token provided, skipping Discord.")
+    } else {
+      const guildId = await ask(rl, "Guild (server) ID", null)
+      if (!guildId) {
+        console.log("No guild ID provided, skipping Discord.")
+      } else {
+        discordConfig = {
+          token,
+          guild_id: guildId,
+          channels: {},
+        }
+      }
+    }
+  }
+
+  console.log()
+
+  // ── 4. Workspace root ──────────────────────────────────────────────────
+
+  const cwd = process.cwd()
+  const workspaceRoot = await ask(rl, "Workspace root (where agents work)", cwd)
+
+  // ── 5. Orchestrator harness ────────────────────────────────────────────
+
+  console.log()
+  console.log("── Orchestrator ──")
+  console.log("Which AI CLI harness runs your orchestrator?")
+  console.log()
+
+  const harness = await askChoice(
+    rl,
+    "Harness",
+    ["claude-code", "opencode", "codex"],
+    "claude-code",
+  )
+
+  const model = await ask(rl, "Model", defaultModel(harness))
+
+  console.log()
+
+  // ── 6. State and log directories ───────────────────────────────────────
+
+  const stateDir = OPENFLEET_DIR
+  const logDir = path.join(OPENFLEET_DIR, "logs")
+
+  // ── 7. Generate configs ────────────────────────────────────────────────
+
+  const created = []
+
+  // deployment.json
+  const deployment = {
+    name: deploymentName,
+    workspaceRoot,
+    server: {
+      host: "127.0.0.1",
+      port: 4096,
+      stateDir,
+      logDir,
+    },
+    parent: {
+      agent: deploymentName,
+      sessionScript: null,
+    },
+    routing: {
+      assistant_channel: `channel://${deploymentName}`,
+      default_human_channel: `channel://${deploymentName}`,
+      direct_message_policy: "agent-channel-preferred",
+      server_architecture: {
+        server_name: "OpenFleet",
+        status_channel: "channel://fleet-status",
+        tasks_channel: "channel://tasks",
+        categories: [
+          {
+            name: "control-plane",
+            channels: [
+              `channel://${deploymentName}`,
+              "channel://fleet-status",
+              "channel://tasks",
+              "channel://alerts",
+            ],
+          },
+          {
+            name: "agents",
+            channels: ["channel://code-status"],
+          },
+          {
+            name: "reports",
+            channels: ["channel://daily"],
+          },
+        ],
+      },
+      persistent_agent_channels: {
+        [deploymentName]: `channel://${deploymentName}`,
+        coder: "channel://code-status",
+      },
+    },
+    jobs: {},
+  }
+
+  const deploymentPath = path.join(OPENFLEET_DIR, "deployment.json")
+  writeJSON(deploymentPath, deployment)
+  created.push(deploymentPath)
+
+  // discord.json (optional)
+  if (discordConfig) {
+    const discordPath = path.join(OPENFLEET_DIR, "discord.json")
+    writeJSON(discordPath, discordConfig)
+    created.push(discordPath)
+  }
+
+  // profiles.json
+  const provider = defaultProvider(harness)
+  const profileId = `${harness.replace("-", "-")}-${model.replace(/[^a-z0-9]/gi, "")}-orchestrator`
+  const profiles = {
+    profiles: {
+      [profileId]: {
+        profile_id: profileId,
+        harness,
+        provider,
+        model,
+        host: "local",
+        role: "orchestrator",
+        status: "available",
+        cost_class: "high",
+        latency_class: "medium",
+      },
+    },
+  }
+
+  const profilesPath = path.join(OPENFLEET_DIR, "profiles.json")
+  writeJSON(profilesPath, profiles)
+  created.push(profilesPath)
+
+  // orchestrator.json
+  const orchestrator = {
+    profile_id: profileId,
+    harness,
+    session_id: null,
+    tmux_session: "openfleet",
+    tmux_window: "1",
+    workdir: workspaceRoot,
+    model,
+    activated_at: new Date().toISOString(),
+  }
+
+  const orchestratorPath = path.join(OPENFLEET_DIR, "orchestrator.json")
+  writeJSON(orchestratorPath, orchestrator)
+  created.push(orchestratorPath)
+
+  // Ensure logs dir exists
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true })
+  }
+
+  // ── 8. Summary ─────────────────────────────────────────────────────────
+
+  console.log()
+  console.log("╔══════════════════════════════════════════════════════════╗")
+  console.log("║                    Setup Complete                       ║")
+  console.log("╚══════════════════════════════════════════════════════════╝")
+  console.log()
+  console.log("Created:")
+  for (const f of created) {
+    console.log(`  ${f}`)
+  }
+
+  console.log()
+  console.log("Configuration:")
+  console.log(`  Deployment:  ${deploymentName}`)
+  console.log(`  Workspace:   ${workspaceRoot}`)
+  console.log(`  Harness:     ${harness}`)
+  console.log(`  Model:       ${model}`)
+  console.log(`  State dir:   ${stateDir}`)
+  if (discordConfig) {
+    console.log(`  Discord:     guild ${discordConfig.guild_id} (add channels to discord.json)`)
+  } else {
+    console.log(`  Discord:     not configured (run 'openfleet init' again to add)`)
+  }
+
+  console.log()
+  console.log("Next steps:")
+  console.log("  1. Review and customize ~/.openfleet/deployment.json")
+  console.log("  2. Add runtime profiles:  openfleet profile upsert --id <name> --harness <h> --model <m> --role <role>")
+  if (!discordConfig) {
+    console.log("  3. (Optional) Set up Discord:  re-run 'openfleet init' or create ~/.openfleet/discord.json manually")
+  } else {
+    console.log("  3. Map Discord channels in ~/.openfleet/discord.json")
+  }
+  console.log("  4. Start the orchestrator:  openfleet orchestrator start")
+  console.log("  5. Spawn an agent:  openfleet spawn <name> --harness <h> --model <m>")
+  console.log()
+}
+
+main().catch((err) => {
+  console.error(err.message || err)
+  process.exit(1)
+})

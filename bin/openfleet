@@ -43,6 +43,9 @@ const commands = {
   respawn: (args) => run("agent-lifecycle", ["respawn", ...args]),
   compact: (args) => run("agent-lifecycle", ["compact", ...args]),
 
+  // Setup
+  init: (args) => run("init", args),
+
   // Maintenance
   maintenance: (args) => run("maintenance-loop", args),
   stalled: (args) => run("stalled-jobs", args),
@@ -100,6 +103,9 @@ OPERATIONS
   orchestrator [args] Orchestrator controls
   events [args]       Tail event log
   mcp [args]          Start MCP server
+
+SETUP
+  init                Interactive setup wizard
 
 HELP
   help                Show this help
