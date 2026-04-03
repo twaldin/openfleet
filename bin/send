@@ -1,0 +1,146 @@
+#!/usr/bin/env node
+// Universal message sender — routes to any agent regardless of harness
+const { execFileSync } = require("child_process")
+const os = require("os")
+const path = require("path")
+const fs = require("fs")
+const { parseArgs } = require("../lib/opencode")
+const { loadRegistry, saveRegistry, upsertSession } = require("../core/runtime/registry")
+const { loadActiveOrchestrator } = require("../core/runtime/orchestrator")
+const { createEventStore } = require("../core/runtime/events")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const direction = args.direction || "parent_to_worker"
+
+  // Handle --to-parent mode (flag parsed by parseArgs, not positional)
+  if (args["to-parent"]) {
+    const message = args._.join(" ").trim() || args.message || ""
+    if (!message) {
+      console.error("Usage: send --to-parent --sender <name> --message \"text\"")
+      process.exit(1)
+    }
+    return sendToParent(stateRoot, message, args.sender)
+  }
+
+  const target = args._[0]
+  const message = args._.slice(1).join(" ").trim() || args.message || ""
+
+  if (!target || !message) {
+    console.error("Usage: send <agent-name> <message>")
+    console.error("       send --to-parent --sender <name> --message \"text\"")
+    process.exit(1)
+  }
+
+  // Look up agent in registry
+  const registry = loadRegistry(stateRoot)
+  const session = findAgentSession(registry, target)
+
+  if (!session) {
+    console.error(`Agent '${target}' not found in registry. Known agents:`)
+    Object.values(registry.sessions).forEach(s => {
+      if (s.name) console.error(`  ${s.name} (${s.harness || "unknown"})`)
+    })
+    process.exit(1)
+  }
+
+  const harness = session.harness || "opencode"
+  const tmuxSession = session.tmux_session
+  const tmuxWindow = session.tmux_window
+
+  if ((harness === "claude-code" || harness === "codex") && tmuxSession && tmuxWindow) {
+    // Send via tmux
+    sendViaTmux(tmuxSession, tmuxWindow, message)
+    console.log(`Sent to ${target} via tmux (${harness}) @ ${tmuxSession}:${tmuxWindow}`)
+  } else if (harness === "opencode" && session.session_id) {
+    // Send via OpenCode HTTP API
+    sendViaOpencode(session, message, stateRoot)
+    console.log(`Sent to ${target} via opencode API`)
+  } else if (tmuxSession && tmuxWindow) {
+    // Fallback: try tmux if we have coordinates
+    sendViaTmux(tmuxSession, tmuxWindow, message)
+    console.log(`Sent to ${target} via tmux (fallback) @ ${tmuxSession}:${tmuxWindow}`)
+  } else {
+    console.error(`Cannot route message to ${target}: no tmux coords or opencode session`)
+    process.exit(1)
+  }
+
+  // Emit event
+  createEventStore(stateRoot).append({
+    type: "message.created",
+    session_id: session.session_id,
+    agent_id: target,
+    payload: { direction, text: message },
+  })
+}
+
+function sendToParent(stateRoot, message, sender) {
+  const orchestrator = loadActiveOrchestrator(stateRoot)
+  if (!orchestrator) {
+    console.error("No active orchestrator registered")
+    process.exit(1)
+  }
+
+  const label = sender ? `[${sender.toUpperCase()}]: ` : ""
+  const fullMessage = `${label}${message}`
+
+  if (orchestrator.harness === "opencode" && orchestrator.session_id) {
+    const baseUrl = process.env.OPENCODE_URL || "http://127.0.0.1:4096"
+    const url = `${baseUrl}/session/${orchestrator.session_id}/prompt_async?directory=${encodeURIComponent(orchestrator.workdir || "")}`
+    const payload = JSON.stringify({ parts: [{ type: "text", text: fullMessage }] })
+    execFileSync("curl", ["--max-time", "10", "-sS", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload, url], { encoding: "utf8" })
+  } else if (orchestrator.tmux_session && orchestrator.tmux_window) {
+    sendViaTmux(orchestrator.tmux_session, orchestrator.tmux_window, fullMessage)
+  } else {
+    console.error("Cannot route to parent: no transport available")
+    process.exit(1)
+  }
+
+  createEventStore(stateRoot).append({
+    type: "message.created",
+    agent_id: sender || "unknown",
+    payload: { direction: "worker_to_parent", text: fullMessage },
+  })
+
+  console.log(`Sent to parent (${orchestrator.harness})`)
+}
+
+function findAgentSession(registry, name) {
+  // First try by name
+  for (const session of Object.values(registry.sessions)) {
+    if (session.name === name || session.agent_id === name) return session
+  }
+  return null
+}
+
+function sendViaTmux(session, window, message) {
+  // Use load-buffer for long messages to avoid shell escaping issues
+  if (message.length > 500) {
+    const tmp = path.join(os.tmpdir(), `openfleet-send-${Date.now()}.txt`)
+    fs.writeFileSync(tmp, message)
+    execFileSync("tmux", ["load-buffer", tmp], { stdio: "ignore" })
+    execFileSync("tmux", ["paste-buffer", "-t", `${session}:${window}`], { stdio: "ignore" })
+    fs.unlinkSync(tmp)
+  } else {
+    execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "-l", message], { stdio: "ignore" })
+  }
+  execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "Enter"], { stdio: "ignore" })
+}
+
+function sendViaOpencode(session, message, stateRoot) {
+  const baseUrl = process.env.OPENCODE_URL || "http://127.0.0.1:4096"
+  const url = `${baseUrl}/session/${session.session_id}/prompt_async?directory=${encodeURIComponent(session.directory || session.workspace || "")}`
+  const payload = JSON.stringify({
+    agent: session.agentProfile || session.name,
+    parts: [{ type: "text", text: message }],
+  })
+  execFileSync("curl", ["--max-time", "10", "-sS", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload, url], { encoding: "utf8" })
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(e.message)
+  process.exit(1)
+}

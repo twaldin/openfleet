@@ -1,0 +1,144 @@
+#!/usr/bin/env node
+// Universal agent spawner — works for any harness
+const { execFileSync } = require("child_process")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { loadRegistry, saveRegistry, upsertSession } = require("../core/runtime/registry")
+const { createEventStore } = require("../core/runtime/events")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const name = args._[0]
+  const harness = args.harness || "claude-code"
+  const model = args.model || "opus-4.6"
+  const workdir = args.dir || path.join(os.homedir(), "cairn")
+  const tmuxSession = args["tmux-session"] || "openfleet"
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const bootstrap = args.bootstrap || null
+
+  if (!name) {
+    console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--bootstrap <prompt>]")
+    process.exit(1)
+  }
+
+  // Ensure tmux session exists
+  try {
+    execFileSync("tmux", ["has-session", "-t", tmuxSession], { stdio: "ignore" })
+  } catch {
+    execFileSync("tmux", ["new-session", "-d", "-s", tmuxSession, "-n", "bootstrap"], { stdio: "ignore" })
+  }
+
+  // Kill existing window if any
+  try {
+    execFileSync("tmux", ["kill-window", "-t", `${tmuxSession}:${name}`], { stdio: "ignore" })
+  } catch { /* fine */ }
+
+  // Launch the right CLI
+  let launchCmd
+  switch (harness) {
+    case "claude-code":
+      launchCmd = `claude --dangerously-skip-permissions --model ${model}`
+      break
+    case "codex":
+      launchCmd = `codex -m ${model} -C ${workdir} --no-alt-screen`
+      break
+    case "opencode":
+      // OpenCode uses its HTTP API, not tmux directly — but we still create a window for visibility
+      launchCmd = `opencode`
+      break
+    default:
+      console.error(`Unknown harness: ${harness}`)
+      process.exit(1)
+  }
+
+  execFileSync("tmux", [
+    "new-window", "-t", tmuxSession, "-n", name, "-c", workdir, launchCmd,
+  ], { stdio: "ignore", shell: true })
+
+  // Wait for CLI to initialize
+  sleep(3000)
+
+  // Handle Codex trust prompt
+  if (harness === "codex") {
+    const pane = capturePane(tmuxSession, name)
+    if (pane.includes("Do you trust")) {
+      execFileSync("tmux", ["send-keys", "-t", `${tmuxSession}:${name}`, "1", "Enter"], { stdio: "ignore" })
+      sleep(1500)
+    }
+  }
+
+  // Send bootstrap prompt if provided
+  if (bootstrap) {
+    sendToPane(tmuxSession, name, bootstrap)
+  }
+
+  // Register in openfleet registry
+  const registry = loadRegistry(stateRoot)
+  const sessionId = `spawn_${name}_${Date.now()}`
+  upsertSession(registry, {
+    session_id: sessionId,
+    name,
+    agent_id: name,
+    runtime_instance_id: name,
+    harness,
+    model,
+    tmux_session: tmuxSession,
+    tmux_window: name,
+    directory: workdir,
+    agentProfile: name,
+    workspace: workdir,
+    created_at: Date.now(),
+  })
+  saveRegistry(stateRoot, registry)
+
+  // Emit event
+  createEventStore(stateRoot).append({
+    type: "session.spawned",
+    session_id: sessionId,
+    agent_id: name,
+    payload: { harness, model, tmux_session: tmuxSession, tmux_window: name, workdir },
+  })
+
+  const result = {
+    ok: true,
+    name,
+    harness,
+    model,
+    session_id: sessionId,
+    tmux_session: tmuxSession,
+    tmux_window: name,
+    workdir,
+  }
+  console.log(JSON.stringify(result, null, 2))
+}
+
+function sendToPane(session, window, message) {
+  // Use load-buffer/paste-buffer for long messages, send-keys for short
+  if (message.length > 500) {
+    const tmp = path.join(os.tmpdir(), `openfleet-spawn-${Date.now()}.txt`)
+    fs.writeFileSync(tmp, message)
+    execFileSync("tmux", ["load-buffer", tmp], { stdio: "ignore" })
+    execFileSync("tmux", ["paste-buffer", "-t", `${session}:${window}`], { stdio: "ignore" })
+    fs.unlinkSync(tmp)
+  } else {
+    execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "-l", message], { stdio: "ignore" })
+  }
+  execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "Enter"], { stdio: "ignore" })
+}
+
+function capturePane(session, window) {
+  return execFileSync("tmux", ["capture-pane", "-pt", `${session}:${window}`, "-S", "-40"], { encoding: "utf8" })
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(e.message)
+  process.exit(1)
+}
