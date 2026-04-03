@@ -56,6 +56,14 @@ function buildAgentInstructions(agent, role, deployment) {
     `BLOCKER PROTOCOL`,
     `- If missing context blocks safe progress, create a blocker instead of guessing.`,
     `- Use: node ${taskStateBin} blocker create --job <job-id> --workflow <workflow-id> --agent ${agent} --summary "<short blocker summary>" --question "<what you need from the human>" --type human --channel "${agentChannel || routing.default_human_channel || ""}"`,
+    ``,
+    `COMPACTION PROTOCOL (persistent agents)`,
+    `- When context feels heavy, you are explicitly told to compact, or after extended work:`,
+    `  1. Write your full current state to state.md in your working directory`,
+    `     Include: what you were doing, key findings, next actions, any open questions`,
+    `  2. Post a brief status update to your Discord channel`,
+    `  3. Message parent: node ${sendBin} --to-parent --sender ${agent} --message "Compacted. State saved to state.md."`,
+    `- On restart/respawn, always read state.md and core.md first to restore context.`,
   )
 
   return lines.join("\n")
