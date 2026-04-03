@@ -6,6 +6,7 @@ const path = require('node:path')
 
 const { buildSummary } = require('../core/ops')
 const { createTask } = require('../core/runtime/tasks')
+const { createJob } = require('../core/runtime/jobs')
 const { createBlocker } = require('../core/runtime/blockers')
 const { createApproval } = require('../core/runtime/approvals')
 
@@ -35,6 +36,18 @@ test('buildSummary includes open tasks, blockers, and approvals', () => {
     status: 'pending',
     channel_binding: task.channel_binding,
   })
+  createJob(stateDir, {
+    type: 'stock-monitor.check',
+    status: 'queued',
+    agent: 'stock-monitor',
+    trigger: 'scheduler',
+  })
+  createJob(stateDir, {
+    type: 'monitor.detect',
+    status: 'running',
+    agent: 'monitor',
+    trigger: 'maintenance-loop',
+  })
 
   const summary = buildSummary(stateDir)
 
@@ -44,6 +57,10 @@ test('buildSummary includes open tasks, blockers, and approvals', () => {
   assert.match(summary, /Need channel routing answer/)
   assert.match(summary, /Pending approvals:/)
   assert.match(summary, /Approve summary rollout/)
+  assert.match(summary, /Scheduled jobs:/)
+  assert.match(summary, /stock-monitor\.check -> stock-monitor \[scheduler\]/)
+  assert.match(summary, /Maintenance loops:/)
+  assert.match(summary, /monitor\.detect -> monitor \[maintenance-loop\]/)
 })
 
 test('buildSummary can scope task state to an agent channel', () => {

@@ -1,6 +1,7 @@
 const fs = require("fs")
 const path = require("path")
 const crypto = require("crypto")
+const { resolveProject } = require('./projects')
 
 function tasksPath(stateDir) {
   return path.join(stateDir, "tasks.json")
@@ -29,16 +30,21 @@ function createTask(stateDir, input) {
   const data = loadTasks(stateDir)
   const id = input.id || `task_${crypto.randomUUID()}`
   const now = new Date().toISOString()
+  const project = resolveProject(stateDir, input)
   const task = {
     id,
     title: input.title || "task",
     source: input.source || null,
+    project_id: input.project_id || input.projectId || project?.id || null,
+    repo: input.repo || input.source?.repo || project?.repo || null,
     status: input.status || "created",
     assignee: input.assignee || null,
     workflow_id: input.workflow_id || input.workflowId || null,
     blocker_ids: input.blocker_ids || [],
     approval_ids: input.approval_ids || [],
-    channel_binding: input.channel_binding || input.channelBinding || null,
+    channel_binding: input.channel_binding || input.channelBinding || project?.channel_binding || null,
+    project_host: input.project_host || project?.host || null,
+    default_runtime_profiles: input.default_runtime_profiles || project?.default_runtime_profiles || null,
     created_at: now,
     updated_at: now,
   }

@@ -5,23 +5,30 @@ const os = require('os')
 const path = require('path')
 const { execFileSync } = require('child_process')
 const { decideContinuation } = require('../core/continuation')
+const { loadActiveOrchestrator } = require('../core/runtime/orchestrator')
 
 function main() {
   const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
   const decision = decideContinuation(stateRoot, { source: 'maintenance-loop' })
   const maintenanceFile = path.join(stateRoot, 'maintenance.json')
   const maintenanceState = loadJson(maintenanceFile) || {}
+  const waitCleared = clearWaitLatchOnNewMessage(stateRoot, maintenanceState)
+  if (waitCleared) {
+    fs.writeFileSync(maintenanceFile, `${JSON.stringify(maintenanceState, null, 2)}\n`)
+  }
   const result = {
     decision,
     nudged: null,
     backlogStarted: null,
     orchestratorPrompted: null,
+    waitLatched: Boolean(maintenanceState.wait_latched),
   }
 
-  const stalled = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/stalled-jobs', 'list'], { encoding: 'utf8' }))
+  const stalledJobsBin = path.resolve(__dirname, 'stalled-jobs')
+  const stalled = JSON.parse(execFileSync('node', [stalledJobsBin, 'list'], { encoding: 'utf8' }))
   if (stalled.length) {
     const first = stalled[0]
-    result.nudged = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/stalled-jobs', 'nudge', first.job.id], { encoding: 'utf8' }))
+    result.nudged = JSON.parse(execFileSync('node', [stalledJobsBin, 'nudge', first.job.id], { encoding: 'utf8' }))
   }
 
   const nudgeKey = stalled.length
@@ -30,7 +37,8 @@ function main() {
   const lastAt = maintenanceState.last_nudge_at ? Date.parse(maintenanceState.last_nudge_at) : 0
   const ageMs = Date.now() - (Number.isNaN(lastAt) ? 0 : lastAt)
   const shouldPrompt = (
-    (stalled.length > 0 || decision.decision === 'continue' || decision.reason === 'work_in_progress') &&
+    !maintenanceState.wait_latched &&
+    (stalled.length > 0 || decision.decision === 'continue' || decision.reason === 'work_in_progress' || decision.reason === 'blocked_or_awaiting_approval') &&
     (maintenanceState.last_nudge_key !== nudgeKey || ageMs > 90_000)
   )
 
@@ -39,18 +47,48 @@ function main() {
       ? `[SYSTEM]: stalled job ${stalled[0].job.id} still has no completion/blocker. Resume the highest-value active work now, or create a blocker/report-completion if appropriate.`
       : decision.reason === 'work_in_progress'
         ? `[SYSTEM]: active workflow work is still in progress. Resume supervising the highest-value active task now, or create a blocker if progress is stuck.`
+      : decision.reason === 'blocked_or_awaiting_approval'
+        ? `[SYSTEM]: all remaining work is currently blocked or awaiting approval. Surface the real blockers clearly, or if you intentionally want silence, run: node ${path.resolve(__dirname, 'orchestrator-control')} wait`
       : `[SYSTEM]: continuation policy says runnable work remains. Resume the highest-value active task now, or create a blocker if blocked.`
-    result.orchestratorPrompted = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/orchestrator', 'send', '--message', message], { encoding: 'utf8' }))
+    result.orchestratorPrompted = JSON.parse(execFileSync('node', [path.resolve(__dirname, 'orchestrator'), 'send', '--message', message], { encoding: 'utf8' }))
     maintenanceState.last_nudge_at = new Date().toISOString()
     maintenanceState.last_nudge_key = nudgeKey
     fs.writeFileSync(maintenanceFile, `${JSON.stringify(maintenanceState, null, 2)}\n`)
   }
 
   if (decision.decision === 'wait' && decision.reason === 'no_runnable_work') {
-    result.backlogStarted = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/backlog-runner'], { encoding: 'utf8' }))
+    result.backlogStarted = JSON.parse(execFileSync('node', [path.resolve(__dirname, 'backlog-runner')], { encoding: 'utf8' }))
   }
 
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+function clearWaitLatchOnNewMessage(stateRoot, maintenanceState) {
+  if (!maintenanceState.wait_latched || !maintenanceState.wait_latched_at) return
+  const orchestrator = loadActiveOrchestrator(stateRoot)
+  if (!orchestrator || orchestrator.harness !== 'opencode') return
+
+  const waitAt = Date.parse(maintenanceState.wait_latched_at)
+  if (Number.isNaN(waitAt)) return
+
+  try {
+    const raw = execFileSync('curl', ['--max-time', '10', '-sS', `http://127.0.0.1:4096/session/${orchestrator.session_id}/message?directory=${encodeURIComponent(orchestrator.workdir)}`], { encoding: 'utf8' })
+    const messages = JSON.parse(raw)
+    const hasNewMessage = messages.some((msg) => {
+      const role = msg?.info?.role
+      const created = msg?.info?.created || msg?.info?.time?.created || 0
+      return role === 'user' && Number(created) > waitAt
+    })
+    if (hasNewMessage) {
+      maintenanceState.wait_latched = false
+      maintenanceState.wait_latched_at = null
+      return true
+    }
+  } catch {
+    // ignore
+  }
+
+  return false
 }
 
 function loadJson(filePath) {

@@ -1,0 +1,108 @@
+#!/usr/bin/env node
+// Unified openfleet CLI entrypoint
+const { execFileSync } = require("child_process")
+const path = require("path")
+
+const binDir = __dirname
+
+const commands = {
+  // State queries
+  status: () => run("ops", ["dashboard"]),
+  agents: () => run("ops", ["agents"]),
+  dashboard: () => run("ops", ["dashboard"]),
+  summary: () => run("ops", ["summary"]),
+  presence: () => run("ops", ["presence"]),
+
+  // Task management
+  task: (args) => run("task-state", args),
+  dispatch: (args) => run("dispatch", args),
+  execute: (args) => run("execute", args),
+
+  // Job lifecycle
+  "report-completion": (args) => run("report-completion", args),
+  complete: (args) => run("report-completion", args),
+
+  // Communication
+  send: (args) => run("message_agent", args),
+  message: (args) => run("message_agent", args),
+  remote: (args) => run("remote", args),
+  discord: (args) => run("remote", ["discord", ...args]),
+
+  // Profiles
+  profile: (args) => run("profile", args),
+  profiles: () => run("profile", ["list"]),
+
+  // Maintenance
+  maintenance: (args) => run("maintenance-loop", args),
+  stalled: (args) => run("stalled-jobs", args),
+  reconcile: (args) => run("reconcile-state", args),
+
+  // Orchestrator
+  orchestrator: (args) => run("orchestrator", args),
+
+  // Events
+  events: (args) => run("ops", ["tail", ...(args || [])]),
+
+  // Help
+  help: () => {
+    console.log(`openfleet — harness-agnostic agent orchestration
+
+USAGE
+  openfleet <command> [args...]
+
+COMMANDS
+  status            Fleet dashboard overview
+  agents            List all agents and health
+  dashboard         Full dashboard
+  summary           Compact summary
+  presence          Agent presence/activity
+
+  task <subcommand> Task lifecycle (create, list, update, etc.)
+  dispatch [args]   Dispatch a job to an agent
+  complete <job-id> Report job completion
+
+  send <agent> <msg>  Message an agent
+  discord <subcommand>  Discord operations (post, summary, etc.)
+
+  profile <subcmd>  Runtime profile management
+  profiles          List all runtime profiles
+
+  events [--since]  Tail event log
+  stalled           Check for stalled jobs
+  maintenance       Run maintenance loop
+
+  help              Show this help
+`)
+  },
+}
+
+function run(script, args = []) {
+  const scriptPath = path.join(binDir, script)
+  try {
+    execFileSync("node", [scriptPath, ...args], { stdio: "inherit" })
+  } catch (e) {
+    process.exit(e.status || 1)
+  }
+}
+
+function main() {
+  const args = process.argv.slice(2)
+  const command = args[0]
+  const rest = args.slice(1)
+
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    commands.help()
+    return
+  }
+
+  const handler = commands[command]
+  if (!handler) {
+    console.error(`Unknown command: ${command}`)
+    console.error(`Run 'openfleet help' for usage`)
+    process.exit(1)
+  }
+
+  handler(rest)
+}
+
+main()

@@ -3,7 +3,9 @@ const path = require('path')
 const { listJobs } = require('./runtime/jobs')
 const { listAgentMetadata, fetchSessionMessages, renderMessages } = require('./ops')
 
-async function listStalledJobs(stateRoot) {
+async function listStalledJobs(stateRoot, { serverStateDir, serverLogDir } = {}) {
+  const resolvedStateDir = serverStateDir || path.join(os.homedir(), '.openfleet', 'system', 'opencode')
+  const resolvedLogDir = serverLogDir || path.join(os.homedir(), '.openfleet', 'system', 'logs')
   const jobs = listJobs(stateRoot).filter((job) => ['running', 'dispatched'].includes(job.status))
   const agents = listAgentMetadata(stateRoot)
   const byName = new Map(agents.map((a) => [a.name, a]))
@@ -15,8 +17,8 @@ async function listStalledJobs(stateRoot) {
     try {
       const messages = await fetchSessionMessages({
         metadata,
-        serverStateDir: path.join(os.homedir(), '.cairn', 'system', 'opencode'),
-        serverLogDir: path.join(os.homedir(), '.cairn', 'system', 'logs'),
+        serverStateDir: resolvedStateDir,
+        serverLogDir: resolvedLogDir,
       })
       const rendered = renderMessages(messages, 12)
       const last = [...rendered].reverse().find((m) => m.role === 'assistant')

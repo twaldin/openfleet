@@ -1,4 +1,4 @@
-const { postDiscord } = require('./discord')
+const { postDiscord, resolveInboundDiscordMessage } = require('./discord')
 const { buildApprovalSurface, buildBlockerSurface, buildPresenceSurface, buildSummary } = require('../ops')
 
 function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers = {} }) {
@@ -65,7 +65,16 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
     })
   }
 
-  throw new Error('Usage: remote discord <post|summary|approvals|blockers|presence> ...')
+  if (action === 'route-inbound') {
+    return resolveInboundDiscordMessage({
+      channelId: args.channelId,
+      routing: args.routing || {},
+      configPath: args.configPath,
+      guildLayoutPath: args.guildLayoutPath,
+    })
+  }
+
+  throw new Error('Usage: remote discord <post|summary|approvals|blockers|presence|route-inbound> ...')
 }
 
 module.exports = {

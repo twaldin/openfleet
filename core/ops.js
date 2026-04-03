@@ -159,6 +159,10 @@ function buildDashboard(stateRoot = defaultStateRoot()) {
 
   const enrichedAgents = agents.map((agent) => classifyAgent(agent, jobs))
 
+  const taskItems = tasks.map((task) => enrichTask(task, workflows, jobs, enrichedAgents))
+  const scheduledJobs = jobs.filter((job) => Boolean(job.trigger) && job.trigger !== 'workflow-complete')
+  const maintenanceLoops = scheduledJobs.filter((job) => isMaintenanceLoop(job))
+
   return {
     generated_at: new Date().toISOString(),
     counts: {
@@ -170,7 +174,7 @@ function buildDashboard(stateRoot = defaultStateRoot()) {
       approvals: approvals.length,
     },
     agents: enrichedAgents,
-    task_items: tasks,
+    task_items: taskItems,
     jobs: summarizeByStatus(jobs),
     workflows: summarizeByStatus(workflows),
     tasks: summarizeByStatus(tasks),
@@ -179,6 +183,30 @@ function buildDashboard(stateRoot = defaultStateRoot()) {
     active_workflows: workflows.filter((item) => item.status === "active"),
     runnable_jobs: jobs.filter((item) => ["queued", "assigned"].includes(item.status)),
     in_progress_jobs: jobs.filter((item) => ["running", "dispatched"].includes(item.status)),
+    scheduled_jobs: scheduledJobs,
+    maintenance_loops: maintenanceLoops,
+  }
+}
+
+function enrichTask(task, workflows, jobs, agents = []) {
+  const workflow = task.workflow_id ? workflows.find((wf) => wf.id === task.workflow_id) : null
+  const relatedJobs = workflow ? jobs.filter((job) => job.workflow_id === workflow.id) : []
+  const activeJob = relatedJobs.find((job) => ['running', 'dispatched', 'assigned', 'queued', 'blocked'].includes(job.status)) || null
+  const logicalOwner = task.assignee || activeJob?.agent || null
+  const activeWorker = activeJob?.agent || logicalOwner || null
+  const workerAgent = activeWorker
+    ? agents.find((agent) => agent.agent_id === activeWorker || agent.name === activeWorker)
+    : null
+  return {
+    ...task,
+    logical_owner: logicalOwner,
+    current_step: workflow?.current_step || null,
+    workflow_status: workflow?.status || null,
+    active_job_id: activeJob?.id || null,
+    active_agent: activeWorker,
+    active_runtime_instance: workerAgent?.runtime_instance_id || null,
+    active_runtime_status: workerAgent?.runtime_state || null,
+    active_profile: activeJob?.input?.selected_profile || activeJob?.output?.selected_profile || null,
   }
 }
 
@@ -219,10 +247,27 @@ function buildSummary(stateRoot = defaultStateRoot(), options = {}) {
     }
   }
 
+  if (dashboard.scheduled_jobs.length) {
+    lines.push('Scheduled jobs:')
+    for (const job of dashboard.scheduled_jobs.slice(0, 5)) {
+      lines.push(`- ${job.type} -> ${job.agent || 'unassigned'} [${job.trigger}]`)
+    }
+  }
+
+  if (dashboard.maintenance_loops.length) {
+    lines.push('Maintenance loops:')
+    for (const job of dashboard.maintenance_loops.slice(0, 5)) {
+      lines.push(`- ${job.type} -> ${job.agent || 'unassigned'} [${job.trigger}]`)
+    }
+  }
+
   if (scoped.tasks.length) {
     lines.push('Open tasks:')
     for (const task of scoped.tasks.slice(0, 5)) {
-      lines.push(`- ${task.assignee || 'unassigned'}: ${task.title} [${task.status}] @ ${task.channel_binding || 'no-channel'}`)
+      const owner = task.logical_owner || '-'
+      const worker = task.active_agent || '-'
+      const step = task.current_step || task.workflow_status || task.status || 'unknown'
+      lines.push(`- ${task.title} | owner=${owner} | worker=${worker} | instance=${task.active_runtime_instance || '-'} | step=${step} @ ${task.channel_binding || 'no-channel'}`)
     }
   }
 
@@ -258,6 +303,15 @@ function buildDashboardSurface(stateRoot = defaultStateRoot()) {
     lines.push('- none')
   }
 
+  if (dashboard.task_items.length) {
+    lines.push('')
+    lines.push('Tasks:')
+    for (const task of dashboard.task_items.slice(0, 5)) {
+      const step = task.current_step || task.workflow_status || task.status || 'unknown'
+      lines.push(`- ${task.title} | owner=${task.logical_owner || '-'} | worker=${task.active_agent || '-'} | instance=${task.active_runtime_instance || '-'} | step=${step}`)
+    }
+  }
+
   if (dashboard.in_progress_jobs.length) {
     lines.push('')
     lines.push('In-progress jobs:')
@@ -272,6 +326,19 @@ function buildDashboardSurface(stateRoot = defaultStateRoot()) {
     for (const job of dashboard.runnable_jobs.slice(0, 5)) {
       lines.push(`- ${job.type} -> ${job.agent || 'unassigned'} [${job.status}] (${job.id})`)
     }
+  }
+
+  if (dashboard.scheduled_jobs.length) {
+    lines.push('')
+    lines.push('Scheduled jobs:')
+    for (const job of dashboard.scheduled_jobs.slice(0, 5)) {
+      lines.push(`- ${job.type} -> ${job.agent || 'unassigned'} [${job.trigger}]`)
+    }
+  }
+
+  if (dashboard.maintenance_loops.length) {
+    lines.push('')
+    lines.push(`Maintenance loops: ${dashboard.maintenance_loops.length}`)
   }
 
   if (dashboard.open_blockers.length || dashboard.pending_approvals.length) {
@@ -391,6 +458,12 @@ function formatRuntimeState(state) {
     default:
       return state || 'unknown'
   }
+}
+
+function isMaintenanceLoop(job) {
+  const trigger = String(job.trigger || '').toLowerCase()
+  const type = String(job.type || '').toLowerCase()
+  return /maintenance|schedule|scheduler|cron/.test(trigger) || type.startsWith('monitor.') || type.startsWith('stock-monitor.')
 }
 
 function scopeDashboard(dashboard, options = {}) {

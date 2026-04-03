@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+
+function main() {
+  const [command] = process.argv.slice(2)
+  const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
+  const file = path.join(stateRoot, 'maintenance.json')
+  const data = load(file) || {}
+
+  if (command === 'wait') {
+    data.wait_latched = true
+    data.wait_latched_at = new Date().toISOString()
+    save(file, data)
+    return print({ ok: true, mode: 'wait', data })
+  }
+
+  if (command === 'resume') {
+    data.wait_latched = false
+    data.wait_latched_at = null
+    save(file, data)
+    return print({ ok: true, mode: 'resume', data })
+  }
+
+  if (command === 'status' || !command) {
+    return print({ ok: true, data })
+  }
+
+  throw new Error('Usage: orchestrator-control [wait|resume|status]')
+}
+
+function load(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return null }
+}
+function save(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n')
+}
+function print(v) { process.stdout.write(JSON.stringify(v, null, 2) + '\n') }
+
+try { main() } catch (e) { console.error(e.message); process.exit(1) }

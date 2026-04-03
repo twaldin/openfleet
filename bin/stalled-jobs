@@ -8,20 +8,29 @@ const { updateJob } = require('../core/runtime/jobs')
 const { createEventStore } = require('../core/runtime/events')
 const { parseArgs } = require('../lib/opencode')
 const { listStalledJobs } = require('../core/stalled')
+const { loadDeploymentConfig } = require('../core/deployment')
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   const [command, id] = args._
   const stateRoot = args['state-root'] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
 
+  const stalledOpts = {}
+  const deploymentPath = args.deployment || process.env.OPENFLEET_DEPLOYMENT
+  if (deploymentPath) {
+    const deployment = loadDeploymentConfig(deploymentPath)
+    stalledOpts.serverStateDir = deployment.server.stateDir
+    stalledOpts.serverLogDir = deployment.server.logDir
+  }
+
   if (!command || command === 'list') {
-    const stalled = await listStalledJobs(stateRoot)
+    const stalled = await listStalledJobs(stateRoot, stalledOpts)
     process.stdout.write(`${JSON.stringify(stalled, null, 2)}\n`)
     return
   }
 
   if (command === 'nudge') {
-    const stalled = await listStalledJobs(stateRoot)
+    const stalled = await listStalledJobs(stateRoot, stalledOpts)
     const match = stalled.find((item) => item.job.id === id)
     if (!match) throw new Error(`No stalled job found for ${id}`)
 
@@ -53,7 +62,8 @@ async function main() {
     const sessionName = match.job.output?.execution?.session || match.metadata.name
     const agentProfile = match.job.output?.execution?.agentProfile || match.metadata.agentProfile || match.job.agent
     const prompt = `SYSTEM: Your latest turn appears finished, but job ${match.job.id} is still in progress. If the work is complete, call report-completion now. If you are blocked, create a blocker now. Otherwise continue the job immediately.`
-    execFileSync(path.join(os.homedir(), '.cairn', 'system', 'bin', 'message_agent'), [sessionName, '--agent', agentProfile, prompt], { encoding: 'utf8' })
+    const helperDir = process.env.OPENFLEET_HELPER_DIR || path.join(os.homedir(), '.cairn', 'system', 'bin')
+    execFileSync(path.join(helperDir, 'message_agent'), [sessionName, '--agent', agentProfile, prompt], { encoding: 'utf8' })
     process.stdout.write(JSON.stringify({ ok: true, nudged: id, session: sessionName }, null, 2) + '\n')
     return
   }

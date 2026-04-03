@@ -53,6 +53,17 @@ function decideContinuation(stateDir, options = {}) {
     }
   }
 
+  // No runnable work, no running jobs, no blockers, no approvals — session can stop
+  if (runningJobs.length === 0 && blockers.length === 0 && approvals.length === 0 &&
+      activeWorkflows.length === 0 && blockedWorkflows.length === 0 && approvalPausedWorkflows.length === 0) {
+    return {
+      decision: "stop",
+      reason: "all_work_complete",
+      source,
+      counts: summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals),
+    }
+  }
+
   return {
     decision: "wait",
     reason: "no_runnable_work",

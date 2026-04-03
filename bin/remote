@@ -20,6 +20,9 @@ function main() {
       message: args.message || args._.slice(2).join(' '),
       agent: args.agent || null,
       channelBinding: args['channel-binding'] || null,
+      channelId: args['channel-id'] || null,
+      configPath: args['config-path'] || null,
+      guildLayoutPath: args['guild-layout-path'] || null,
     },
   })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)

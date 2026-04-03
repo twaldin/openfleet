@@ -26,15 +26,20 @@ test('buildDashboardSurface renders a user-facing dashboard summary', () => {
     updated_at: new Date().toISOString(),
   })
   createJob(stateDir, { type: 'coder.fix', status: 'dispatched', agent: 'coder' })
+  createJob(stateDir, { type: 'stock-monitor.check', status: 'queued', agent: 'stock-monitor', trigger: 'scheduler' })
   createTask(stateDir, { title: 'Polish ops UI', status: 'active', assignee: 'coder' })
 
   const surface = buildDashboardSurface(stateDir)
 
   assert.match(surface, /OpenFleet dashboard @/)
-  assert.match(surface, /Counts: agents=1 jobs=1 workflows=0 tasks=1 blockers=0 approvals=0/)
+  assert.match(surface, /Counts: agents=1 jobs=2 workflows=0 tasks=1 blockers=0 approvals=0/)
   assert.match(surface, /Agent presence:/)
   assert.match(surface, /coder \| instance=coder-gpt@macbook \| working \(active\)/)
+  assert.match(surface, /Tasks:/)
+  assert.match(surface, /Polish ops UI \| owner=coder \| worker=coder \| instance=coder-gpt@macbook \| step=active/)
   assert.match(surface, /In-progress jobs:/)
+  assert.match(surface, /Scheduled jobs:/)
+  assert.match(surface, /stock-monitor\.check -> stock-monitor \[scheduler\]/)
 })
 
 test('renderListSurface renders agent rows with headers', () => {

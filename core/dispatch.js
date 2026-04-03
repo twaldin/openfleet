@@ -1,14 +1,21 @@
 const { createEventStore } = require("./runtime/events")
 const { createJob, listJobs, updateJob } = require("./runtime/jobs")
 const { selectProfile } = require("./runtime/profiles")
+const { resolveProject } = require('./runtime/projects')
 
 function dispatchJob(stateRoot, input) {
   const agent = input.agent || null
   enforceSingleActiveJob(stateRoot, agent)
+  const project = resolveProject(stateRoot, {
+    project_id: input.project_id || input.projectId || input.input?.context?.project_id || null,
+    repo: input.repo || input.input?.context?.repo || null,
+    context: input.input?.context || {},
+  })
+  const preferredProfile = input.preferred_profile || input.preferredProfile || project?.default_runtime_profiles?.[input.role] || null
 
   const selected = selectProfile(stateRoot, {
     allowed: input.allowed_profiles || input.allowedProfiles || [],
-    preferred: input.preferred_profile || input.preferredProfile || null,
+    preferred: preferredProfile,
     role: input.role || null,
     harness: input.harness || null,
   })
@@ -26,6 +33,7 @@ function dispatchJob(stateRoot, input) {
     trigger: input.trigger || null,
     input: {
       ...(input.input || {}),
+      project_id: input.input?.project_id || input.input?.context?.project_id || project?.id || null,
       selected_profile: selected.profile_id,
     },
   })

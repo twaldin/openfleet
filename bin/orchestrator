@@ -3,7 +3,7 @@
 const { execFileSync } = require("child_process")
 const os = require("os")
 const path = require("path")
-const { parseArgs, request } = require("../lib/opencode")
+const { parseArgs } = require("../lib/opencode")
 const { createEventStore } = require("../core/runtime/events")
 const { getProfile, upsertProfile } = require("../core/runtime/profiles")
 const { saveActiveOrchestrator, loadActiveOrchestrator } = require("../core/runtime/orchestrator")
@@ -17,9 +17,9 @@ function main() {
   if (command === "launch-codex-cairn") {
     const tmuxSession = args.session || "openfleet"
     const tmuxWindow = args.window || "cairn-codex"
-    const workdir = args.dir || "/Users/twaldin/cairn"
+    const workdir = args.dir || path.join(os.homedir(), "cairn")
     const model = args.model || "gpt-5.4"
-    const promptFile = args.prompt || "/Users/twaldin/cairn/CODEX_CAIRN_BOOTSTRAP.md"
+    const promptFile = args.prompt || path.join(os.homedir(), "cairn", "CODEX_CAIRN_BOOTSTRAP.md")
     const profileId = args.profile || "codex-gpt54-orchestrator"
 
     ensureTmuxSession(tmuxSession)
@@ -120,12 +120,10 @@ function bootstrapCodexPane(session, window, promptFile) {
 function sendToOrchestrator(active, message) {
   if (active.harness === 'opencode') {
     const baseUrl = process.env.OPENCODE_URL || 'http://127.0.0.1:4096'
-    return request(baseUrl, 'POST', `/session/${active.session_id}/prompt_async`, {
-      directory: active.workdir,
-      body: {
-        parts: [{ type: 'text', text: message }],
-      },
-    })
+    const url = `${baseUrl}/session/${active.session_id}/prompt_async?directory=${encodeURIComponent(active.workdir)}`
+    const payload = JSON.stringify({ parts: [{ type: 'text', text: message }] })
+    execFileSync('curl', ['--max-time', '10', '-sS', '-X', 'POST', '-H', 'Content-Type: application/json', '-d', payload, url], { encoding: 'utf8' })
+    return
   }
   return sendToPane(active.tmux_session, active.tmux_window, message)
 }

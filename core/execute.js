@@ -6,6 +6,7 @@ const { getJob, updateJob } = require("./runtime/jobs")
 const { getProfile } = require("./runtime/profiles")
 const { executeOpencodeJob } = require("./harness/opencode")
 const { executeCodexJob } = require("./harness/codex")
+const { executeClaudeCodeJob } = require("./harness/claude-code")
 const { getPlaybook } = require("./playbooks")
 
 function executeJob(stateRoot, jobId) {
@@ -40,6 +41,8 @@ function executeJob(stateRoot, jobId) {
     result = executeOpencodeJob({ job, profile, prompt, stateRoot })
   } else if (profile.harness === "codex") {
     result = executeCodexJob({ job, profile, prompt, stateRoot })
+  } else if (profile.harness === "claude-code") {
+    result = executeClaudeCodeJob({ job, profile, prompt })
   } else {
     throw new Error(`Unsupported harness: ${profile.harness}`)
   }
@@ -70,8 +73,9 @@ function executeJob(stateRoot, jobId) {
   return { job: updated, profile, execution: result }
 }
 
-function executeControllerJob({ job, controller, args = [] }) {
-  const controllerPath = path.join(process.env.HOME, ".cairn", "system", "bin", controller)
+function executeControllerJob({ job, controller, args = [], controllerDir }) {
+  const dir = controllerDir || process.env.OPENFLEET_CONTROLLER_DIR || path.join(os.homedir(), ".cairn", "system", "bin")
+  const controllerPath = path.join(dir, controller)
   execFileSync(controllerPath, args, { encoding: "utf8" })
   return {
     ok: true,
@@ -87,9 +91,11 @@ function buildJobPrompt(job) {
   const input = job.input || {}
   const playbook = getPlaybook(job.agent)
   const workflowId = job.workflow_id || 'none'
+  const reportCompletionBin = path.resolve(__dirname, '../bin/report-completion')
+  const taskStateBin = path.resolve(__dirname, '../bin/task-state')
   const completionHint = [
     'COMPLETION PROTOCOL',
-    `- When the job is actually complete, run: node /Users/twaldin/openfleet/bin/report-completion ${job.id} --summary "<one concise summary>" --continue --execute`,
+    `- When the job is actually complete, run: node ${reportCompletionBin} ${job.id} --summary "<one concise summary>" --continue --execute`,
     '- Use a short operational summary.',
     '- Do not claim completion until the requested work is genuinely done.',
   ].join('\n')
@@ -97,7 +103,7 @@ function buildJobPrompt(job) {
   const blockerHint = [
     'BLOCKER PROTOCOL',
     '- If you cannot proceed safely because context is missing, create a blocker instead of guessing.',
-    `- Use: node /Users/twaldin/openfleet/bin/task-state blocker create --job ${job.id} --workflow ${workflowId} --agent ${job.agent} --summary "<short blocker summary>" --question "<what you need from the human>" --type human --channel "${input?.context?.channel_binding || ''}"`,
+    `- Use: node ${taskStateBin} blocker create --job ${job.id} --workflow ${workflowId} --agent ${job.agent} --summary "<short blocker summary>" --question "<what you need from the human>" --type human --channel "${input?.context?.channel_binding || ''}"`,
   ].join('\n')
   return [
     `OpenFleet job execution.`,

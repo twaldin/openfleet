@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+const path = require('path')
 const { execFileSync } = require('child_process')
 
 function main() {
   const session = process.argv[2] || 'openfleet-ops'
-  const agents = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/ops', 'dashboard'], { encoding: 'utf8' })).agents || []
+  const opsBin = path.resolve(__dirname, 'ops')
+  const agents = JSON.parse(execFileSync('node', [opsBin, 'dashboard'], { encoding: 'utf8' })).agents || []
   const alive = agents.filter((agent) => agent.runtime_state && agent.runtime_state !== 'dead')
   if (!alive.length) {
     throw new Error('No alive agents to follow')
@@ -23,9 +25,10 @@ function recreateSession(name, agents) {
   }
 
   const [first, ...rest] = agents
-  execFileSync('tmux', ['new-session', '-d', '-s', name, '-n', first.name, 'sh', '-lc', `node /Users/twaldin/openfleet/bin/ops follow ${first.name}`], { stdio: 'ignore' })
+  const opsBin = path.resolve(__dirname, 'ops')
+  execFileSync('tmux', ['new-session', '-d', '-s', name, '-n', first.name, 'sh', '-lc', `node ${opsBin} follow ${first.name}`], { stdio: 'ignore' })
   for (const agent of rest) {
-    execFileSync('tmux', ['new-window', '-t', name, '-n', agent.name, 'sh', '-lc', `node /Users/twaldin/openfleet/bin/ops follow ${agent.name}`], { stdio: 'ignore' })
+    execFileSync('tmux', ['new-window', '-t', name, '-n', agent.name, 'sh', '-lc', `node ${opsBin} follow ${agent.name}`], { stdio: 'ignore' })
   }
 }
 

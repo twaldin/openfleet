@@ -1,6 +1,7 @@
 const fs = require("fs")
 const path = require("path")
 const crypto = require("crypto")
+const { resolveProject } = require('./projects')
 
 function workflowsPath(stateDir) {
   return path.join(stateDir, "workflows.json")
@@ -23,13 +24,23 @@ function createWorkflow(stateDir, input) {
   const data = loadWorkflows(stateDir)
   const id = input.id || `wf_${crypto.randomUUID()}`
   const now = new Date().toISOString()
+  const project = resolveProject(stateDir, input)
+  const context = {
+    ...(input.context || {}),
+    project_id: input.context?.project_id || input.project_id || input.projectId || project?.id || null,
+    repo: input.context?.repo || input.repo || project?.repo || null,
+    channel_binding: input.context?.channel_binding || input.channel_binding || input.channelBinding || project?.channel_binding || null,
+    project_host: input.context?.project_host || project?.host || null,
+    default_runtime_profiles: input.context?.default_runtime_profiles || project?.default_runtime_profiles || null,
+  }
   const workflow = {
     id,
     type: input.type || "workflow",
     status: input.status || "created",
+    project_id: input.project_id || input.projectId || project?.id || null,
     current_step: input.current_step || input.currentStep || null,
     steps: input.steps || [],
-    context: input.context || {},
+    context,
     previous_status: input.previous_status || input.previousStatus || null,
     pause_reason: input.pause_reason || input.pauseReason || null,
     paused_by: input.paused_by || input.pausedBy || null,

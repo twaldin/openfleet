@@ -1,32 +1,36 @@
 const { execFileSync } = require("child_process")
+const os = require("os")
 const path = require("path")
+const { envelopeSystemMessage } = require('../envelope')
 
-function executeOpencodeJob({ job, profile, prompt, stateRoot }) {
+function resolveHelperDir() {
+  return process.env.OPENFLEET_HELPER_DIR || path.join(os.homedir(), ".cairn", "system", "bin")
+}
+
+function executeOpencodeJob({ job, profile, prompt, stateRoot, exec = execFileSync }) {
   const agent = job.agent
   if (!agent) throw new Error("Opencode execution requires job.agent")
+  const envelopedPrompt = envelopeSystemMessage(agent, prompt)
+  const helperDir = resolveHelperDir()
+  const localHost = process.env.OPENFLEET_LOCAL_HOST || os.hostname()
 
-  if (profile.host === "thinkpad-1") {
-    if (agent === "monitor") {
-      execFileSync(path.join(process.env.HOME, ".cairn", "system", "bin", "thinkpad_monitor_prompt"), [prompt], { encoding: "utf8" })
-      return { ok: true, mode: "remote", host: "thinkpad-1", harness: "opencode", agent }
-    }
-    if (agent === "stock-monitor") {
-      execFileSync(path.join(process.env.HOME, ".cairn", "system", "bin", "thinkpad_stock_monitor_prompt"), [prompt], { encoding: "utf8" })
-      return { ok: true, mode: "remote", host: "thinkpad-1", harness: "opencode", agent }
-    }
-    throw new Error(`No remote OpenCode helper for host=${profile.host} agent=${agent}`)
+  if (profile.host && profile.host !== localHost && profile.host !== "macbook") {
+    const dispatchScript = profile.dispatch_script
+      || path.join(helperDir, `${profile.host.replace(/-/g, '_')}_${agent.replace(/-/g, '_')}_prompt`)
+    exec(dispatchScript, [envelopedPrompt], { encoding: "utf8" })
+    return { ok: true, mode: "remote", host: profile.host, harness: "opencode", agent }
   }
 
   const localMapping = mapLocalProfile(profile, agent)
 
   const args = [
-    path.join(process.env.HOME, ".cairn", "system", "bin", "message_agent"),
+    path.join(helperDir, "message_agent"),
     localMapping.sessionName,
     "--agent",
     localMapping.agentProfile,
-    prompt,
+    envelopedPrompt,
   ]
-  execFileSync(args[0], args.slice(1), { encoding: "utf8" })
+  exec(args[0], args.slice(1), { encoding: "utf8" })
   return { ok: true, mode: "local", host: profile.host || "macbook", harness: "opencode", agent, session: localMapping.sessionName, agentProfile: localMapping.agentProfile }
 }
 

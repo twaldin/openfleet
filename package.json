@@ -2,8 +2,11 @@
   "name": "openfleet",
   "private": true,
   "type": "commonjs",
-  "description": "Reusable OpenFleet runtime layer for session-based agent control.",
+  "description": "Harness-agnostic agent orchestration for AI CLI tools.",
   "license": "MIT",
+  "bin": {
+    "openfleet": "bin/openfleet"
+  },
   "scripts": {
     "test": "node --test"
   }

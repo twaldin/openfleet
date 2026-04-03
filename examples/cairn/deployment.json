@@ -12,8 +12,8 @@
     "sessionScript": "/Users/twaldin/.cairn/system/bin/cairn_session"
   },
   "routing": {
-    "assistant_channel": "channel://lifeos",
-    "default_human_channel": "channel://lifeos",
+    "assistant_channel": "channel://cairn",
+    "default_human_channel": "channel://cairn",
     "direct_message_policy": "agent-channel-preferred",
     "server_architecture": {
       "server_name": "OpenFleet",
@@ -24,7 +24,7 @@
         {
           "name": "control-plane",
           "channels": [
-            "channel://lifeos",
+            "channel://cairn",
             "channel://fleet-status",
             "channel://fleet-blockers",
             "channel://fleet-approvals"
@@ -53,7 +53,7 @@
         "Morning briefing. Read WORKING.md + core.md + tasks.md. Run `/Users/twaldin/.cairn/system/bin/read_calendar 3` and `/Users/twaldin/.cairn/system/bin/smart_mail 15`.",
         "",
         "Send the briefing to Discord `#daily` using:",
-        "`node /Users/twaldin/openfleet/bin/remote discord post --channel 1485084342073163957 --message \"...\"`",
+        "`node /Users/twaldin/openfleet/bin/remote discord post --channel 1489486461551120505 --message \"...\"`",
         "",
         "Include:",
         "- day plan",
@@ -64,12 +64,12 @@
         "- overnight progress",
         "- any blockers",
         "",
-        "Then verify `monitor` and `trader` are still alive in tmux session `claudecord`. If either is unhealthy, attempt recovery and post a short alert to `#alerts`."
+        "Then verify agents are healthy via `node ~/openfleet/bin/ops agents`. If any are stale, attempt recovery and post a short alert to `#alerts`."
       ]
     },
     "heartbeat": {
       "prompt": [
-        "Heartbeat. Check tasks.md, urgent deadlines, and system health. Review whether `monitor` and `trader` in tmux session `claudecord` are alive. If they are stale or dead, attempt recovery.",
+        "Heartbeat. Check tasks.md, urgent deadlines, and system health. Review agent health via `node ~/openfleet/bin/ops agents`. If any are stale, attempt recovery.",
         "",
         "Run any narrow checks you need for school deadlines, investing watch items, and overnight queue health.",
         "",
@@ -92,7 +92,7 @@
     },
     "nightly_reflection": {
       "prompt": [
-        "Nightly reflection. Review the day's activity, update WORKING.md/core.md/tasks.md as needed, and send a short reflection summary to `#daily` using `node /Users/twaldin/openfleet/bin/remote discord post --channel 1485084342073163957 --message \"...\"`.",
+        "Nightly reflection. Review the day's activity, update WORKING.md/core.md/tasks.md as needed, and send a short reflection summary to `#daily` using `node /Users/twaldin/openfleet/bin/remote discord post --channel 1489486461551120505 --message \"...\"`.",
         "",
         "After the summary, keep context lean and pause for the next scheduled work. Do not break the live Discord path."
       ]
