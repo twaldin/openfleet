@@ -1,0 +1,97 @@
+#!/usr/bin/env node
+// Merge a worker's worktree branch after optional evaluator review
+const { execFileSync } = require("child_process")
+const os = require("os")
+const path = require("path")
+const fs = require("fs")
+const { parseArgs } = require("../lib/opencode")
+const { loadRegistry } = require("../core/runtime/registry")
+const { createEventStore } = require("../core/runtime/events")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const name = args._[0]
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const skipReview = args["skip-review"] || false
+  const autoCleanup = args.cleanup !== false // default true
+
+  if (!name) {
+    console.error("Usage: merge-worker <name> [--skip-review] [--no-cleanup]")
+    process.exit(1)
+  }
+
+  // Find the worker's session in registry
+  const registry = loadRegistry(stateRoot)
+  const session = Object.values(registry.sessions).find(s => s.name === name)
+  if (!session?.worktree) {
+    console.error(`Worker '${name}' has no worktree — nothing to merge`)
+    process.exit(1)
+  }
+
+  const wt = session.worktree
+  const worktreePath = wt.path
+  const branch = wt.branch
+  const repoDir = wt.repo
+
+  // Check if worktree has commits ahead of base
+  const diffStat = execFileSync("git", ["-C", worktreePath, "diff", "--stat", `${wt.base}...${branch}`], {
+    encoding: "utf8",
+  }).trim()
+
+  if (!diffStat) {
+    console.log(`Worker '${name}' has no changes to merge`)
+    if (autoCleanup) cleanupWorktree(repoDir, worktreePath, branch)
+    return
+  }
+
+  console.log(`\nChanges from ${name} (${branch}):`)
+  console.log(diffStat)
+
+  // Run tests in the worktree
+  console.log(`\nRunning tests in worktree...`)
+  try {
+    execFileSync("node", ["--test"], { cwd: worktreePath, stdio: "pipe", encoding: "utf8" })
+    console.log("Tests: PASS")
+  } catch (e) {
+    console.error("Tests: FAIL")
+    console.error(e.stdout || e.stderr || e.message)
+    console.error(`\nMerge aborted — fix tests in ${worktreePath} first`)
+    process.exit(1)
+  }
+
+  // Merge to main
+  console.log(`\nMerging ${branch} into ${wt.base}...`)
+  execFileSync("git", ["-C", repoDir, "merge", "--no-ff", branch, "-m", `merge: ${name} worker output (${branch})`], {
+    stdio: "inherit",
+  })
+
+  createEventStore(stateRoot).append({
+    type: "worktree.merged",
+    agent_id: name,
+    payload: { branch, base: wt.base, diff_stat: diffStat },
+  })
+
+  console.log(`Merged ${branch} into ${wt.base}`)
+
+  // Cleanup
+  if (autoCleanup) {
+    cleanupWorktree(repoDir, worktreePath, branch)
+    console.log(`Cleaned up worktree and branch`)
+  }
+}
+
+function cleanupWorktree(repoDir, worktreePath, branch) {
+  try {
+    execFileSync("git", ["-C", repoDir, "worktree", "remove", worktreePath, "--force"], { stdio: "ignore" })
+  } catch { /* already removed */ }
+  try {
+    execFileSync("git", ["-C", repoDir, "branch", "-D", branch], { stdio: "ignore" })
+  } catch { /* already deleted */ }
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(e.message)
+  process.exit(1)
+}

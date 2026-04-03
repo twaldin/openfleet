@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Universal agent spawner — works for any harness
+// Universal agent spawner — works for any harness, with optional git worktree isolation
 const { execFileSync } = require("child_process")
 const fs = require("fs")
 const os = require("os")
@@ -13,14 +13,23 @@ function main() {
   const name = args._[0]
   const harness = args.harness || "claude-code"
   const model = args.model || "opus-4.6"
-  const workdir = args.dir || path.join(os.homedir(), "cairn")
+  let workdir = args.dir || path.join(os.homedir(), "cairn")
   const tmuxSession = args["tmux-session"] || "openfleet"
   const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const bootstrap = args.bootstrap || null
+  const useWorktree = args.worktree || false
+  const baseBranch = args["base-branch"] || "main"
 
   if (!name) {
-    console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--bootstrap <prompt>]")
+    console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--worktree] [--bootstrap <prompt>]")
     process.exit(1)
+  }
+
+  // Create git worktree for isolation if requested
+  let worktreeInfo = null
+  if (useWorktree) {
+    worktreeInfo = createWorktree(workdir, name, baseBranch)
+    workdir = worktreeInfo.path
   }
 
   // Ensure tmux session exists
@@ -45,7 +54,6 @@ function main() {
       launchCmd = `codex -m ${model} -C ${workdir} --full-auto`
       break
     case "opencode":
-      // OpenCode uses its HTTP API, not tmux directly — but we still create a window for visibility
       launchCmd = `opencode`
       break
     default:
@@ -89,6 +97,7 @@ function main() {
     directory: workdir,
     agentProfile: name,
     workspace: workdir,
+    worktree: worktreeInfo,
     created_at: Date.now(),
   })
   saveRegistry(stateRoot, registry)
@@ -98,7 +107,12 @@ function main() {
     type: "session.spawned",
     session_id: sessionId,
     agent_id: name,
-    payload: { harness, model, tmux_session: tmuxSession, tmux_window: name, workdir },
+    payload: {
+      harness, model,
+      tmux_session: tmuxSession, tmux_window: name,
+      workdir,
+      worktree: worktreeInfo,
+    },
   })
 
   const result = {
@@ -110,8 +124,25 @@ function main() {
     tmux_session: tmuxSession,
     tmux_window: name,
     workdir,
+    worktree: worktreeInfo,
   }
   console.log(JSON.stringify(result, null, 2))
+}
+
+function createWorktree(repoDir, name, baseBranch) {
+  const branch = `openfleet/${name}`
+  const worktreePath = path.join(os.tmpdir(), `openfleet-wt-${name}-${Date.now()}`)
+
+  // Create branch from base
+  try {
+    execFileSync("git", ["-C", repoDir, "branch", "-D", branch], { stdio: "ignore" })
+  } catch { /* branch didn't exist */ }
+
+  execFileSync("git", ["-C", repoDir, "worktree", "add", "-b", branch, worktreePath, baseBranch], {
+    stdio: "pipe", encoding: "utf8",
+  })
+
+  return { path: worktreePath, branch, base: baseBranch, repo: repoDir }
 }
 
 function sendToPane(session, window, message) {
