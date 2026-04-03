@@ -715,6 +715,8 @@ function buildStatusEmbed() {
     "⏰ `07-22:17` Heartbeat (hourly)",
     "⏰ `09:25 M-F` Spawn stock-monitor",
     "⏰ `16:05 M-F` Kill stock-monitor",
+    "⏰ `09:30 M-F` Trader market scan",
+    "⏰ `2h` Monitor VPS health check",
     "⏰ `21:03` Habit nudge",
     "⏰ `00:02` Nightly reflection + compaction",
     "⏰ `05:42` Overnight news digest",
@@ -760,9 +762,11 @@ function getFleetStatus() {
       agent.status = "idle" // alive, can receive messages
     }
 
-    // Check opencode session (for opencode-based agents without tmux)
+    // Check opencode session — only if recently active (within 15 min)
+    // The opencode API reports stale sessions as existing, so we gate on updated_at
     if (agent.status === "dead" && session.session_id && !session.tmux_window) {
-      if (checkOpencodeSession(session.session_id)) {
+      const age = Date.now() - new Date(session.updated_at || 0).getTime()
+      if (age < 15 * 60 * 1000 && checkOpencodeSession(session.session_id)) {
         agent.status = "idle"
       }
     }

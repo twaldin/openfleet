@@ -49,6 +49,7 @@
       ]
     },
     "persistent_agent_channels": {
+      "cairn": "channel://cairn",
       "coder": "channel://code-status",
       "coder-gpt": "channel://code-status",
       "evaluator": "channel://evals",
