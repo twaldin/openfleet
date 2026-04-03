@@ -243,19 +243,25 @@ async function pollPermissions() {
     if (now - ts > 60000) resolvedHashes.delete(h)
   }
 
-  // Scan tmux windows for permission prompts
-  let windows
+  // Scan tmux windows for permission prompts (use index:name to avoid dot-parsing issues)
+  let windowEntries
   try {
-    windows = execSync(`tmux list-windows -t ${TMUX_SESSION} -F '#{window_name}'`, { encoding: "utf8" })
-      .trim().split("\n").filter(Boolean)
+    windowEntries = execSync(`tmux list-windows -t ${TMUX_SESSION} -F '#{window_index}\t#{window_name}'`, { encoding: "utf8" })
+      .trim().split("\n").filter(Boolean).map(line => {
+        const [idx, name] = line.split("\t")
+        return { index: idx, name }
+      })
   } catch { return }
 
-  for (const windowName of windows) {
+  for (const { index: winIndex, name: windowName } of windowEntries) {
     if (pendingPrompts.has(windowName)) continue
+    // Skip the gateway's own window
+    if (windowName === "gateway") continue
 
     let paneText
     try {
-      paneText = execSync(`tmux capture-pane -t ${TMUX_SESSION}:${windowName} -p -S -30`, { encoding: "utf8" })
+      // Use window index to avoid tmux target parsing issues with dots in names
+      paneText = execSync(`tmux capture-pane -t ${TMUX_SESSION}:${winIndex} -p -S -30`, { encoding: "utf8" })
     } catch { continue }
 
     const clean = paneText.replace(/\x1b\[[0-9;]*[mGKHFJABCDsuhlr]/g, "")
@@ -527,15 +533,23 @@ client.on("messageCreate", (msg) => {
 
   process.stderr.write(`openfleet-gateway: message in #${channelName || channelId} → ${agentName || "parent"}\n`)
 
+  const ack = () => { msg.react("👀").catch(() => {}) }
+
   if (agentName) {
     sendToAgent(agentName, msg)
+    ack()
   } else {
     // Route to orchestrator/parent
     const text = msg.content || "(empty)"
     const author = msg.author.username
     const formatted = `[Discord #${channelName || channelId}] ${author}: ${text}`
     execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", formatted], (err) => {
-      if (err) process.stderr.write(`openfleet-gateway: send to parent failed: ${err.message}\n`)
+      if (err) {
+        process.stderr.write(`openfleet-gateway: send to parent failed: ${err.message}\n`)
+        msg.react("❌").catch(() => {})
+      } else {
+        ack()
+      }
     })
   }
 })
@@ -582,6 +596,137 @@ client.on("messageReactionAdd", async (reaction, user) => {
   } catch {}
 })
 
+// ---- Status board (persistent embed, edits in place) ----------------------
+
+const STATUS_BOARD_FILE = path.join(STATE_ROOT, "status-board.json")
+const STATUS_CHANNEL = config.channels?.["fleet-status"]
+const STATUS_INTERVAL = 60_000 // update every 60s
+
+function loadStatusBoard() {
+  try { return JSON.parse(readFileSync(STATUS_BOARD_FILE, "utf8")) } catch { return {} }
+}
+
+function saveStatusBoard(data) {
+  writeFileSync(STATUS_BOARD_FILE, JSON.stringify(data, null, 2))
+}
+
+function buildStatusEmbed() {
+  // Read live fleet state
+  let agents = []
+  try {
+    const reg = JSON.parse(readFileSync(path.join(STATE_ROOT, "registry.json"), "utf8"))
+    agents = Object.values(reg.sessions || {}).filter(s => s.name).map(s => ({
+      name: s.name,
+      harness: s.harness || "opencode",
+      model: s.model || "?",
+      status: getAgentStatus(s),
+    }))
+  } catch {}
+
+  let taskCount = 0, blockerCount = 0
+  try {
+    const tasks = JSON.parse(readFileSync(path.join(STATE_ROOT, "tasks.json"), "utf8"))
+    const all = tasks.tasks ? Object.values(tasks.tasks) : Object.values(tasks)
+    taskCount = all.filter(t => t.status !== "completed" && t.status !== "archived").length
+  } catch {}
+  try {
+    const blockers = JSON.parse(readFileSync(path.join(STATE_ROOT, "blockers.json"), "utf8"))
+    const all = blockers.blockers ? Object.values(blockers.blockers) : Object.values(blockers)
+    blockerCount = all.filter(b => b.status === "open").length
+  } catch {}
+
+  let orch = {}
+  try { orch = JSON.parse(readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8")) } catch {}
+
+  const embed = new EmbedBuilder()
+    .setTitle("OpenFleet — System Status")
+    .setColor(blockerCount > 0 ? 0xFEE75C : 0x57F287)
+    .setDescription(`Updated <t:${Math.floor(Date.now() / 1000)}:R>`)
+
+  // Orchestrator
+  embed.addFields({
+    name: "Orchestrator",
+    value: `${orch.harness || "?"} / ${orch.model || "?"} — ${orch.profile_id || "unregistered"}`,
+    inline: false,
+  })
+
+  // Agents
+  if (agents.length > 0) {
+    const agentLines = agents.map(a => {
+      const icon = a.status === "alive" ? "🟢" : a.status === "stale" ? "🟡" : "⚫"
+      return `${icon} **${a.name}** — ${a.harness}/${a.model}`
+    })
+    // Split into chunks of 10 to fit embed field limits
+    for (let i = 0; i < agentLines.length; i += 10) {
+      embed.addFields({
+        name: i === 0 ? `Agents (${agents.length})` : "\u200b",
+        value: agentLines.slice(i, i + 10).join("\n"),
+        inline: false,
+      })
+    }
+  } else {
+    embed.addFields({ name: "Agents", value: "None active", inline: false })
+  }
+
+  // Tasks + Blockers
+  embed.addFields(
+    { name: "Active Tasks", value: String(taskCount), inline: true },
+    { name: "Open Blockers", value: String(blockerCount), inline: true },
+  )
+
+  embed.setFooter({ text: "Auto-updates every 60s" })
+  embed.setTimestamp()
+
+  return embed
+}
+
+function getAgentStatus(session) {
+  if (!session.updated_at && !session.created_at) return "unknown"
+  const updated = new Date(session.updated_at || session.created_at).getTime()
+  const age = Date.now() - updated
+  if (age < 3 * 60 * 60 * 1000) return "alive"
+  return "stale"
+}
+
+async function updateStatusBoard() {
+  if (!STATUS_CHANNEL) return
+  const embed = buildStatusEmbed()
+  const board = loadStatusBoard()
+
+  try {
+    if (board.messageId) {
+      // Edit existing message
+      const ch = await client.channels.fetch(STATUS_CHANNEL)
+      const msg = await ch.messages.fetch(board.messageId)
+      await msg.edit({ embeds: [embed] })
+    } else {
+      // Create new message and save ID
+      const ch = await client.channels.fetch(STATUS_CHANNEL)
+      const msg = await ch.send({ embeds: [embed] })
+      board.messageId = msg.id
+      board.channelId = STATUS_CHANNEL
+      saveStatusBoard(board)
+      process.stderr.write(`openfleet-gateway: status board created (${msg.id})\n`)
+    }
+  } catch (err) {
+    // Message might have been deleted — create a new one
+    if (err.code === 10008) { // Unknown Message
+      try {
+        const ch = await client.channels.fetch(STATUS_CHANNEL)
+        const msg = await ch.send({ embeds: [embed] })
+        board.messageId = msg.id
+        board.channelId = STATUS_CHANNEL
+        saveStatusBoard(board)
+        process.stderr.write(`openfleet-gateway: status board recreated (${msg.id})\n`)
+      } catch (e2) {
+        process.stderr.write(`openfleet-gateway: status board failed: ${e2.message}\n`)
+      }
+    } else {
+      process.stderr.write(`openfleet-gateway: status board update failed: ${err.message}\n`)
+    }
+  }
+}
+
 // ---- Startup ---------------------------------------------------------------
 
 async function start() {
@@ -594,8 +739,14 @@ async function start() {
 
   client.once("ready", (c) => {
     process.stderr.write(`openfleet-gateway: Discord connected as ${c.user.tag}\n`)
+    process.stderr.write(`openfleet-gateway: guilds: ${c.guilds.cache.map(g => `${g.name}(${g.id})`).join(", ")}\n`)
+    process.stderr.write(`openfleet-gateway: channels monitored: ${Object.keys(channelIdToName).length}\n`)
     setInterval(() => { pollPermissions().catch(() => {}) }, POLL_INTERVAL)
     process.stderr.write("openfleet-gateway: permission watcher started (3s)\n")
+    // Status board — update immediately then every 60s
+    updateStatusBoard().catch(() => {})
+    setInterval(() => { updateStatusBoard().catch(() => {}) }, STATUS_INTERVAL)
+    process.stderr.write("openfleet-gateway: status board started (60s)\n")
   })
 
   await client.login(TOKEN)
