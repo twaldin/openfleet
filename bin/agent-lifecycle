@@ -6,6 +6,7 @@ const os = require("os")
 const path = require("path")
 const { parseArgs } = require("../lib/opencode")
 const { loadRegistry, saveRegistry } = require("../core/runtime/registry")
+const { loadAgents, getAgent } = require("../core/runtime/agents")
 const { createEventStore } = require("../core/runtime/events")
 
 const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
@@ -138,20 +139,48 @@ function compactAgent(args) {
 }
 
 function showStatus() {
+  // Merge agents.json (canonical identity) with registry.json (live sessions)
+  const agents = loadAgents(STATE_ROOT)
   const reg = loadRegistry(STATE_ROOT)
+
+  // Build session lookup by name
+  const sessionByName = {}
+  for (const s of Object.values(reg.sessions)) {
+    if (s.name && (!sessionByName[s.name] || (s.created_at || 0) > (sessionByName[s.name].created_at || 0))) {
+      sessionByName[s.name] = s
+    }
+  }
+
   console.log("Agent".padEnd(20), "Harness".padEnd(12), "Model".padEnd(15), "Role".padEnd(12), "Status")
   console.log("-".repeat(70))
 
-  for (const session of Object.values(reg.sessions)) {
-    if (!session.name) continue
-    const alive = isAlive(session)
-    const status = alive ? "🟢 alive" : session.role === "persistent" ? "⚫ dormant" : "💀 dead"
+  // Show agents from agents.json first (canonical list)
+  for (const [name, agent] of Object.entries(agents)) {
+    const session = sessionByName[name]
+    const alive = session ? isAlive(session) : false
+    const role = agent.role || session?.role || "ephemeral"
+    const status = alive ? "🟢 alive" : role === "persistent" ? "⚫ dormant" : "💀 dead"
     console.log(
-      session.name.padEnd(20),
+      name.padEnd(20),
+      (agent.harness || session?.harness || "?").padEnd(12),
+      (agent.model || session?.model || "?").padEnd(15),
+      role.padEnd(12),
+      status,
+    )
+    delete sessionByName[name] // don't show twice
+  }
+
+  // Show any sessions not in agents.json (ad-hoc spawns)
+  for (const [name, session] of Object.entries(sessionByName)) {
+    const alive = isAlive(session)
+    const status = alive ? "🟢 alive" : "💀 dead"
+    console.log(
+      name.padEnd(20),
       (session.harness || "?").padEnd(12),
       (session.model || "?").padEnd(15),
       (session.role || "ephemeral").padEnd(12),
       status,
+      "(unregistered)",
     )
   }
 }
