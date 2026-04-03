@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenFleet Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0d1117;
+  --bg-surface: #161b22;
+  --bg-elevated: #1c2129;
+  --border: #30363d;
+  --border-focus: #58a6ff;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --text-dim: #484f58;
+  --green: #3fb950;
+  --green-dim: #238636;
+  --blue: #58a6ff;
+  --blue-dim: #1f6feb;
+  --red: #f85149;
+  --red-dim: #da3633;
+  --orange: #d29922;
+  --purple: #bc8cff;
+  --font: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== LAYOUT ===== */
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.logo span {
+  color: var(--blue);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+.status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.warn { background: var(--orange); }
+.status-dot.dead { background: var(--red); }
+
+.fleet-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Main grid */
+.main {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  grid-template-rows: 1fr 260px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Sidebar: agent list */
+.sidebar {
+  grid-row: 1 / 3;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.panel-header .count {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.agent-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.agent-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.12s;
+  border-left: 2px solid transparent;
+}
+
+.agent-item:hover {
+  background: var(--bg-elevated);
+}
+
+.agent-item.selected {
+  background: var(--bg-elevated);
+  border-left-color: var(--blue);
+}
+
+.agent-status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.agent-status-indicator.alive { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.agent-status-indicator.dormant { background: var(--text-dim); }
+.agent-status-indicator.dead { background: var(--red); opacity: 0.6; }
+
+.agent-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-name {
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-role-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.agent-role-badge.persistent { background: var(--green-dim); color: var(--green); }
+.agent-role-badge.ephemeral { background: rgba(88, 166, 255, 0.15); color: var(--blue); }
+
+/* Spawn button area */
+.spawn-area {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.btn:hover { border-color: var(--text-muted); background: var(--bg-surface); }
+.btn.primary { border-color: var(--blue-dim); background: var(--blue-dim); color: #fff; }
+.btn.primary:hover { background: var(--blue); }
+.btn.full-width { width: 100%; }
+
+/* Pane viewer */
+.pane-area {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.pane-viewer {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 16px;
+  background: #010409;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #c9d1d9;
+  min-height: 0;
+}
+
+.pane-viewer .empty {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 40px 0;
+  text-align: center;
+}
+
+/* ANSI color support */
+.ansi-bold { font-weight: 700; }
+.ansi-dim { opacity: 0.6; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }
+.ansi-black { color: #484f58; }
+.ansi-red { color: #f85149; }
+.ansi-green { color: #3fb950; }
+.ansi-yellow { color: #d29922; }
+.ansi-blue { color: #58a6ff; }
+.ansi-magenta { color: #bc8cff; }
+.ansi-cyan { color: #39d4e0; }
+.ansi-white { color: #e6edf3; }
+.ansi-bright-black { color: #6e7681; }
+.ansi-bright-red { color: #ff7b72; }
+.ansi-bright-green { color: #56d364; }
+.ansi-bright-yellow { color: #e3b341; }
+.ansi-bright-blue { color: #79c0ff; }
+.ansi-bright-magenta { color: #d2a8ff; }
+.ansi-bright-cyan { color: #56d4dd; }
+.ansi-bright-white { color: #ffffff; }
+.ansi-bg-black { background: #484f58; }
+.ansi-bg-red { background: var(--red-dim); }
+.ansi-bg-green { background: var(--green-dim); }
+.ansi-bg-yellow { background: #5c4813; }
+.ansi-bg-blue { background: var(--blue-dim); }
+.ansi-bg-magenta { background: #6e40aa; }
+.ansi-bg-cyan { background: #1b5e6e; }
+.ansi-bg-white { background: #8b949e; }
+
+.pane-input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.pane-input input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.pane-input input:focus { border-color: var(--border-focus); }
+.pane-input input::placeholder { color: var(--text-dim); }
+
+/* Bottom row: tasks + events */
+.bottom-left {
+  border-top: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.bottom-right {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.task-list, .event-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.4);
+}
+
+.task-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  margin-top: 1px;
+}
+
+.task-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-assignee {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.event-item {
+  display: flex;
+  gap: 10px;
+  padding: 4px 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.3);
+}
+
+.event-time {
+  color: var(--text-dim);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  min-width: 50px;
+}
+
+.event-type {
+  color: var(--blue);
+  flex-shrink: 0;
+  min-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.event-agent {
+  color: var(--green);
+  flex-shrink: 0;
+  min-width: 90px;
+}
+
+.event-detail {
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Cron bar (footer) */
+.cron-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-x: auto;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.cron-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.cron-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(48, 54, 61, 0.5);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cron-item .cron-sched {
+  color: var(--text-dim);
+}
+
+/* Spawn modal */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 400px;
+  max-width: 90vw;
+}
+
+.modal h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.modal label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+  margin-top: 12px;
+}
+
+.modal label:first-of-type { margin-top: 0; }
+
+.modal input, .modal select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  outline: none;
+}
+
+.modal input:focus, .modal select:focus { border-color: var(--border-focus); }
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ===== RESPONSIVE ===== */
+
+@media (max-width: 768px) {
+  .main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto auto;
+  }
+  .sidebar {
+    grid-row: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 200px;
+  }
+  .pane-area { min-height: 300px; }
+  .bottom-left { border-right: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">Open<span>Fleet</span></div>
+    </div>
+    <div class="header-right">
+      <span id="fleet-status"><span class="status-dot live"></span>Connecting...</span>
+      <span class="fleet-count" id="fleet-count">&mdash;</span>
+      <span id="uptime">&mdash;</span>
+    </div>
+  </header>
+
+  <!-- Main grid -->
+  <div class="main">
+
+    <!-- Sidebar: agents -->
+    <div class="sidebar">
+      <div class="panel-header">Agents <span class="count" id="agent-count">0</span></div>
+      <div class="agent-list" id="agent-list"></div>
+      <div class="spawn-area">
+        <button class="btn full-width" id="spawn-btn">+ Spawn Agent</button>
+      </div>
+    </div>
+
+    <!-- Pane viewer -->
+    <div class="pane-area">
+      <div class="panel-header" id="pane-header">Terminal &mdash; select an agent</div>
+      <div class="pane-viewer" id="pane-viewer">
+        <div class="empty">Select an agent to view its terminal output</div>
+      </div>
+      <div class="pane-input">
+        <input type="text" id="msg-input" placeholder="Send message to agent..." disabled>
+        <button class="btn primary" id="msg-send" disabled>Send</button>
+      </div>
+    </div>
+
+    <!-- Bottom left: tasks -->
+    <div class="bottom-left">
+      <div class="panel-header">Tasks <span class="count" id="task-count">0</span></div>
+      <div class="task-list" id="task-list"></div>
+    </div>
+
+    <!-- Bottom right: events -->
+    <div class="bottom-right">
+      <div class="panel-header">Events</div>
+      <div class="event-list" id="event-list"></div>
+    </div>
+
+  </div>
+
+  <!-- Cron bar -->
+  <div class="cron-bar" id="cron-bar">
+    <span class="cron-label">Cron</span>
+  </div>
+
+</div>
+
+<!-- Spawn modal -->
+<div class="modal-overlay" id="spawn-modal">
+  <div class="modal">
+    <h3>Spawn Agent</h3>
+    <label>Name</label>
+    <input type="text" id="spawn-name" placeholder="e.g., coder-auth">
+    <label>Harness</label>
+    <select id="spawn-harness">
+      <option value="claude-code">claude-code</option>
+      <option value="codex">codex</option>
+      <option value="opencode">opencode</option>
+    </select>
+    <label>Model</label>
+    <input type="text" id="spawn-model" placeholder="opus-4.6" value="opus-4.6">
+    <label>Working Directory</label>
+    <input type="text" id="spawn-dir" placeholder="~/project">
+    <label>Bootstrap Prompt (optional)</label>
+    <input type="text" id="spawn-bootstrap" placeholder="Read CLAUDE.md and begin...">
+    <div class="modal-actions">
+      <button class="btn" id="spawn-cancel">Cancel</button>
+      <button class="btn primary" id="spawn-confirm">Spawn</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  // --- State ---
+  let selectedAgent = null;
+  let paneRefreshTimer = null;
+  let agents = [];
+
+  // --- DOM refs ---
+  const $agentList = document.getElementById("agent-list");
+  const $agentCount = document.getElementById("agent-count");
+  const $paneHeader = document.getElementById("pane-header");
+  const $paneViewer = document.getElementById("pane-viewer");
+  const $msgInput = document.getElementById("msg-input");
+  const $msgSend = document.getElementById("msg-send");
+  const $taskList = document.getElementById("task-list");
+  const $taskCount = document.getElementById("task-count");
+  const $eventList = document.getElementById("event-list");
+  const $cronBar = document.getElementById("cron-bar");
+  const $fleetStatus = document.getElementById("fleet-status");
+  const $fleetCount = document.getElementById("fleet-count");
+  const $uptime = document.getElementById("uptime");
+  const $spawnModal = document.getElementById("spawn-modal");
+
+  // --- ANSI parser ---
+  const ANSI_COLORS = [
+    "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"
+  ];
+
+  function parseAnsi(text) {
+    const container = document.createDocumentFragment();
+    // eslint-disable-next-line no-control-regex
+    const parts = text.split(/(\x1b\[[0-9;]*m)/);
+    let currentClasses = [];
+
+    for (const part of parts) {
+      if (part.startsWith("\x1b[")) {
+        const codes = part.slice(2, -1).split(";").map(Number);
+        for (const code of codes) {
+          if (code === 0) { currentClasses = []; }
+          else if (code === 1) { currentClasses.push("ansi-bold"); }
+          else if (code === 2) { currentClasses.push("ansi-dim"); }
+          else if (code === 3) { currentClasses.push("ansi-italic"); }
+          else if (code === 4) { currentClasses.push("ansi-underline"); }
+          else if (code >= 30 && code <= 37) { currentClasses = currentClasses.filter(c => !c.startsWith("ansi-") || c.startsWith("ansi-b") || c.startsWith("ansi-d") || c.startsWith("ansi-i") || c.startsWith("ansi-u") || c.startsWith("ansi-bg")); currentClasses.push("ansi-" + ANSI_COLORS[code - 30]); }
+          else if (code >= 40 && code <= 47) { currentClasses = currentClasses.filter(c => !c.startsWith("ansi-bg")); currentClasses.push("ansi-bg-" + ANSI_COLORS[code - 40]); }
+          else if (code >= 90 && code <= 97) { currentClasses = currentClasses.filter(c => !c.startsWith("ansi-") || c.startsWith("ansi-b") || c.startsWith("ansi-d") || c.startsWith("ansi-i") || c.startsWith("ansi-u") || c.startsWith("ansi-bg")); currentClasses.push("ansi-bright-" + ANSI_COLORS[code - 90]); }
+        }
+      } else if (part) {
+        if (currentClasses.length > 0) {
+          const span = document.createElement("span");
+          span.className = currentClasses.join(" ");
+          span.textContent = part;
+          container.appendChild(span);
+        } else {
+          container.appendChild(document.createTextNode(part));
+        }
+      }
+    }
+    return container;
+  }
+
+  // --- Rendering ---
+
+  function renderAgents(agentData) {
+    agents = agentData;
+    $agentList.innerHTML = "";
+    $agentCount.textContent = agents.length;
+
+    for (const agent of agents) {
+      const el = document.createElement("div");
+      el.className = "agent-item" + (selectedAgent === agent.name ? " selected" : "");
+      el.dataset.name = agent.name;
+      el.innerHTML =
+        '<div class="agent-status-indicator ' + agent.status + '"></div>' +
+        '<div class="agent-info">' +
+          '<div class="agent-name">' + esc(agent.name) + '</div>' +
+          '<div class="agent-meta">' + esc((agent.harness || "?") + " / " + (agent.model || "?")) + '</div>' +
+        '</div>' +
+        '<span class="agent-role-badge ' + esc(agent.role) + '">' + esc(agent.role) + '</span>';
+      el.addEventListener("click", function() { selectAgent(agent.name); });
+      $agentList.appendChild(el);
+    }
+  }
+
+  function renderTasks(data) {
+    const tasks = data.tasks || [];
+    const blockerMap = {};
+    for (const b of (data.blockers || [])) {
+      if (b.task_id) {
+        if (!blockerMap[b.task_id]) blockerMap[b.task_id] = [];
+        blockerMap[b.task_id].push(b);
+      }
+    }
+
+    $taskList.innerHTML = "";
+    $taskCount.textContent = tasks.length;
+
+    for (const task of tasks.slice(0, 30)) {
+      const hasBlocker = blockerMap[task.id] && blockerMap[task.id].some(function(b) { return b.status === "open"; });
+      let icon = "\u2b1c"; // white square — created
+      if (hasBlocker) icon = "\ud83d\udd34"; // red circle — blocked
+      else if (task.status === "in-progress" || task.status === "running") icon = "\ud83d\udd35"; // blue
+      else if (task.status === "done" || task.status === "completed") icon = "\u2705"; // check
+      else if (task.status === "failed") icon = "\u274c";
+
+      const el = document.createElement("div");
+      el.className = "task-item";
+      el.innerHTML =
+        '<span class="task-icon">' + icon + '</span>' +
+        '<span class="task-title" title="' + esc(task.title || task.id) + '">' + esc(task.title || task.id) + '</span>' +
+        '<span class="task-assignee">' + esc(task.assignee || "") + '</span>';
+      $taskList.appendChild(el);
+    }
+  }
+
+  function renderEvents(events) {
+    $eventList.innerHTML = "";
+    for (const evt of events) {
+      const el = document.createElement("div");
+      el.className = "event-item";
+      const t = evt.ts ? new Date(evt.ts) : null;
+      const timeStr = t ? (String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0")) : "??:??";
+      const detail = evt.payload ? (evt.payload.text || evt.payload.direction || JSON.stringify(evt.payload).slice(0, 80)) : "";
+      el.innerHTML =
+        '<span class="event-time">' + esc(timeStr) + '</span>' +
+        '<span class="event-type">' + esc(evt.type || "?") + '</span>' +
+        '<span class="event-agent">' + esc(evt.agent_id || "") + '</span>' +
+        '<span class="event-detail">' + esc(detail) + '</span>';
+      $eventList.appendChild(el);
+    }
+  }
+
+  function renderCron(crons) {
+    $cronBar.innerHTML = '<span class="cron-label">Cron</span>';
+    for (const c of crons) {
+      const lastStr = c.last_fired ? timeAgo(new Date(c.last_fired)) : "never";
+      const el = document.createElement("span");
+      el.className = "cron-item";
+      el.innerHTML = "\u23f0 " + esc(c.id) + ' <span class="cron-sched">' + esc(c.schedule) + " \u00b7 " + esc(lastStr) + '</span>';
+      $cronBar.appendChild(el);
+    }
+  }
+
+  function renderStatus(data) {
+    const aliveCount = data.alive_count || 0;
+    const totalCount = data.agent_count || 0;
+    const dotClass = aliveCount > 0 ? "live" : totalCount > 0 ? "warn" : "dead";
+    $fleetStatus.innerHTML = '<span class="status-dot ' + dotClass + '"></span>' + (aliveCount > 0 ? "Online" : "No agents");
+    $fleetCount.textContent = aliveCount + "/" + totalCount + " alive";
+    $uptime.textContent = "up " + formatDuration(data.uptime_ms || 0);
+  }
+
+  // --- Agent selection + pane ---
+
+  function selectAgent(name) {
+    selectedAgent = name;
+    $paneHeader.textContent = "Terminal \u2014 " + name;
+    $msgInput.disabled = false;
+    $msgInput.placeholder = "Message " + name + "...";
+    $msgSend.disabled = false;
+
+    // Re-render agent list to update selection
+    renderAgents(agents);
+
+    // Start refreshing pane
+    refreshPane();
+    if (paneRefreshTimer) clearInterval(paneRefreshTimer);
+    paneRefreshTimer = setInterval(refreshPane, 3000);
+  }
+
+  function refreshPane() {
+    if (!selectedAgent) return;
+    fetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/pane")
+      .then(function(r) { return r.text(); })
+      .then(function(text) {
+        if (!text.trim()) {
+          $paneViewer.innerHTML = "";
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "No pane output (agent may not have a tmux session)";
+          $paneViewer.appendChild(empty);
+          return;
+        }
+        $paneViewer.innerHTML = "";
+        $paneViewer.appendChild(parseAnsi(text));
+        // Auto-scroll to bottom
+        $paneViewer.scrollTop = $paneViewer.scrollHeight;
+      })
+      .catch(function() {
+        // Silently ignore fetch errors for pane
+      });
+  }
+
+  // --- Send message ---
+
+  function sendMessage() {
+    if (!selectedAgent) return;
+    const msg = $msgInput.value.trim();
+    if (!msg) return;
+
+    $msgInput.value = "";
+    $msgSend.disabled = true;
+
+    fetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: msg }),
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        $msgSend.disabled = false;
+        if (!data.ok) {
+          console.error("Send failed:", data.error);
+        }
+        // Refresh pane immediately after send
+        setTimeout(refreshPane, 500);
+      })
+      .catch(function(e) {
+        $msgSend.disabled = false;
+        console.error("Send error:", e);
+      });
+  }
+
+  $msgSend.addEventListener("click", sendMessage);
+  $msgInput.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") sendMessage();
+  });
+
+  // --- Spawn modal ---
+
+  document.getElementById("spawn-btn").addEventListener("click", function() {
+    $spawnModal.classList.add("open");
+    document.getElementById("spawn-name").focus();
+  });
+
+  document.getElementById("spawn-cancel").addEventListener("click", function() {
+    $spawnModal.classList.remove("open");
+  });
+
+  $spawnModal.addEventListener("click", function(e) {
+    if (e.target === $spawnModal) $spawnModal.classList.remove("open");
+  });
+
+  document.getElementById("spawn-confirm").addEventListener("click", function() {
+    var name = document.getElementById("spawn-name").value.trim();
+    if (!name) { document.getElementById("spawn-name").focus(); return; }
+
+    var body = {
+      name: name,
+      harness: document.getElementById("spawn-harness").value,
+      model: document.getElementById("spawn-model").value.trim() || undefined,
+      dir: document.getElementById("spawn-dir").value.trim() || undefined,
+      bootstrap: document.getElementById("spawn-bootstrap").value.trim() || undefined,
+    };
+
+    document.getElementById("spawn-confirm").disabled = true;
+
+    fetch("/api/agents/spawn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        document.getElementById("spawn-confirm").disabled = false;
+        $spawnModal.classList.remove("open");
+        if (data.ok !== false) {
+          // Refresh status
+          fetchAll();
+          selectAgent(name);
+        } else {
+          console.error("Spawn failed:", data.error);
+        }
+      })
+      .catch(function(e) {
+        document.getElementById("spawn-confirm").disabled = false;
+        console.error("Spawn error:", e);
+      });
+  });
+
+  // --- SSE ---
+
+  function connectSSE() {
+    var source = new EventSource("/api/stream");
+
+    source.addEventListener("status", function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        renderAgents(data.agents || []);
+        renderStatus(data);
+      } catch {}
+    });
+
+    source.addEventListener("events", function(e) {
+      try {
+        renderEvents(JSON.parse(e.data));
+      } catch {}
+    });
+
+    source.onerror = function() {
+      source.close();
+      $fleetStatus.innerHTML = '<span class="status-dot dead"></span>Disconnected';
+      // Reconnect after 5s
+      setTimeout(connectSSE, 5000);
+    };
+  }
+
+  // --- Initial data fetch ---
+
+  function fetchAll() {
+    fetch("/api/status")
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        renderAgents(data.agents || []);
+        renderStatus(data);
+      })
+      .catch(function() {});
+
+    fetch("/api/tasks")
+      .then(function(r) { return r.json(); })
+      .then(function(data) { renderTasks(data); })
+      .catch(function() {});
+
+    fetch("/api/events")
+      .then(function(r) { return r.json(); })
+      .then(function(data) { renderEvents(data); })
+      .catch(function() {});
+
+    fetch("/api/cron")
+      .then(function(r) { return r.json(); })
+      .then(function(data) { renderCron(data); })
+      .catch(function() {});
+  }
+
+  // Refresh tasks/cron periodically (they don't come via SSE)
+  setInterval(function() {
+    fetch("/api/tasks").then(function(r) { return r.json(); }).then(renderTasks).catch(function() {});
+    fetch("/api/cron").then(function(r) { return r.json(); }).then(renderCron).catch(function() {});
+  }, 10000);
+
+  // --- Utilities ---
+
+  function esc(str) {
+    if (!str) return "";
+    var d = document.createElement("div");
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  function formatDuration(ms) {
+    var s = Math.floor(ms / 1000);
+    if (s < 60) return s + "s";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "m";
+    var h = Math.floor(m / 60);
+    var rm = m % 60;
+    if (h < 24) return h + "h " + rm + "m";
+    var d = Math.floor(h / 24);
+    return d + "d " + (h % 24) + "h";
+  }
+
+  function timeAgo(date) {
+    var diff = Date.now() - date.getTime();
+    if (diff < 60000) return "just now";
+    if (diff < 3600000) return Math.floor(diff / 60000) + "m ago";
+    if (diff < 86400000) return Math.floor(diff / 3600000) + "h ago";
+    return Math.floor(diff / 86400000) + "d ago";
+  }
+
+  // --- Boot ---
+  fetchAll();
+  connectSSE();
+
+})();
+</script>
+</body>
+</html>

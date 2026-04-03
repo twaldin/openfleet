@@ -38,6 +38,9 @@ const commands = {
   profile: (args) => run("profile", args),
   profiles: () => run("profile", ["list"]),
 
+  // Dashboard
+  "web-dashboard": (args) => run("dashboard", args),
+
   // Fleet lifecycle
   cron: (args) => run("cron", args),
   lifecycle: (args) => run("agent-lifecycle", args),
@@ -75,6 +78,9 @@ STATE
   presence            Agent presence/activity
   watch [args]        Interactive operations dashboard
   poll [args]         Poll Discord messages
+
+WEB
+  web-dashboard [--port N]  Web dashboard (default: 3000)
 
 TASKS
   task <subcommand>   Task lifecycle (create, list, update, etc.)

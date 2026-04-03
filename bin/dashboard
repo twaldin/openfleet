@@ -1,0 +1,372 @@
+#!/usr/bin/env node
+// OpenFleet Dashboard — web UI for fleet monitoring and control
+const http = require("http")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+const { execFileSync } = require("child_process")
+const { parseArgs } = require("../lib/opencode")
+const { loadAgents } = require("../core/runtime/agents")
+const { loadRegistry } = require("../core/runtime/registry")
+const { loadTasks, listTasks } = require("../core/runtime/tasks")
+const { loadBlockers, listBlockers } = require("../core/runtime/blockers")
+const { loadApprovals, listApprovals } = require("../core/runtime/approvals")
+const { readEvents } = require("../core/runtime/events")
+
+const args = parseArgs(process.argv.slice(2))
+
+if (args.help || args.h) {
+  console.log(`openfleet dashboard — web UI for fleet monitoring
+
+USAGE
+  dashboard [--port <port>]
+
+OPTIONS
+  --port <n>    Port to listen on (default: 3000, or OPENFLEET_DASHBOARD_PORT)
+  --help        Show this help
+
+ENVIRONMENT
+  OPENFLEET_DASHBOARD_PORT    Port override
+  OPENFLEET_CANONICAL_STATE_DIR   State directory (default: ~/.openfleet)
+`)
+  process.exit(0)
+}
+
+const PORT = Number(args.port || process.env.OPENFLEET_DASHBOARD_PORT || 3000)
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const BIN = __dirname
+const CORE = path.join(__dirname, "..", "core")
+const NODE_MODULES = path.join(__dirname, "..", "node_modules")
+const START_TIME = Date.now()
+
+// --- Liveness check (same pattern as agent-lifecycle) ---
+
+function isAlive(session) {
+  if (session.tmux_session && session.tmux_window) {
+    try {
+      execFileSync("tmux", ["has-session", "-t", session.tmux_session], { stdio: "ignore" })
+      const wins = execFileSync("tmux", ["list-windows", "-t", session.tmux_session, "-F", "#{window_name}"], { encoding: "utf8" })
+      if (wins.split("\n").includes(session.tmux_window)) return true
+    } catch {}
+  }
+  if (session.session_id && session.updated_at) {
+    const age = Date.now() - new Date(session.updated_at).getTime()
+    if (age < 15 * 60 * 1000) return true
+  }
+  return false
+}
+
+// --- API handlers ---
+
+function getFleetStatus() {
+  const agents = loadAgents(STATE_ROOT)
+  const reg = loadRegistry(STATE_ROOT)
+
+  const sessionByName = {}
+  for (const s of Object.values(reg.sessions)) {
+    if (s.name && (!sessionByName[s.name] || (s.created_at || 0) > (sessionByName[s.name].created_at || 0))) {
+      sessionByName[s.name] = s
+    }
+  }
+
+  const merged = []
+
+  for (const [name, agent] of Object.entries(agents)) {
+    const session = sessionByName[name]
+    const alive = session ? isAlive(session) : false
+    const role = agent.role || session?.role || "ephemeral"
+    merged.push({
+      name,
+      harness: agent.harness || session?.harness || null,
+      model: agent.model || session?.model || null,
+      role,
+      alive,
+      status: alive ? "alive" : role === "persistent" ? "dormant" : "dead",
+      tmux_session: session?.tmux_session || null,
+      tmux_window: session?.tmux_window || null,
+      directory: agent.directory || session?.directory || null,
+      updated_at: session?.updated_at || agent.updated_at || null,
+    })
+    delete sessionByName[name]
+  }
+
+  for (const [name, session] of Object.entries(sessionByName)) {
+    const alive = isAlive(session)
+    merged.push({
+      name,
+      harness: session.harness || null,
+      model: session.model || null,
+      role: session.role || "ephemeral",
+      alive,
+      status: alive ? "alive" : "dead",
+      tmux_session: session.tmux_session || null,
+      tmux_window: session.tmux_window || null,
+      directory: session.directory || null,
+      updated_at: session.updated_at || null,
+      unregistered: true,
+    })
+  }
+
+  return {
+    uptime_ms: Date.now() - START_TIME,
+    agent_count: merged.length,
+    alive_count: merged.filter(a => a.alive).length,
+    agents: merged.sort((a, b) => a.name.localeCompare(b.name)),
+  }
+}
+
+function getTasksData() {
+  const tasks = listTasks(STATE_ROOT)
+  const blockers = listBlockers(STATE_ROOT)
+  const approvals = listApprovals(STATE_ROOT)
+  return { tasks, blockers, approvals }
+}
+
+function getEventsData() {
+  const events = readEvents(STATE_ROOT)
+  return events.slice(-50).reverse()
+}
+
+function getCronData() {
+  const cronStatePath = path.join(STATE_ROOT, "cron-state.json")
+  let lastFired = {}
+  try { lastFired = JSON.parse(fs.readFileSync(cronStatePath, "utf8")) } catch {}
+
+  const schedule = [
+    { id: "stock-monitor-spawn", schedule: "9:25 M-F", description: "Spawn stock monitor" },
+    { id: "stock-monitor-kill", schedule: "16:05 M-F", description: "Market close signal" },
+    { id: "monitor-health-check", schedule: "every 2h", description: "VPS health check" },
+    { id: "trader-scan", schedule: "every 4h", description: "Prediction market scan" },
+    { id: "heartbeat", schedule: "every 1h", description: "Orchestrator heartbeat" },
+  ]
+
+  return schedule.map(s => ({
+    ...s,
+    last_fired: lastFired[s.id] || null,
+  }))
+}
+
+function capturePaneContent(agentName) {
+  const reg = loadRegistry(STATE_ROOT)
+  let session = null
+  for (const s of Object.values(reg.sessions)) {
+    if (s.name === agentName || s.agent_id === agentName) {
+      session = s
+      break
+    }
+  }
+
+  if (!session || !session.tmux_session || !session.tmux_window) {
+    return { error: "Agent not found or no tmux session", content: "" }
+  }
+
+  try {
+    const content = execFileSync("tmux", [
+      "capture-pane", "-pt", `${session.tmux_session}:${session.tmux_window}`,
+      "-S", "-100", "-e",
+    ], { encoding: "utf8", timeout: 5000 })
+    return { content, agent: agentName }
+  } catch (e) {
+    return { error: e.message, content: "" }
+  }
+}
+
+function sendMessageToAgent(agentName, message) {
+  try {
+    execFileSync("node", [
+      path.join(BIN, "send"), agentName, message,
+    ], { encoding: "utf8", timeout: 15000 })
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
+function spawnAgent(body) {
+  const spawnArgs = [path.join(BIN, "spawn"), body.name]
+  if (body.harness) spawnArgs.push("--harness", body.harness)
+  if (body.model) spawnArgs.push("--model", body.model)
+  if (body.dir) spawnArgs.push("--dir", body.dir)
+  if (body.bootstrap) spawnArgs.push("--bootstrap", body.bootstrap)
+
+  try {
+    const result = execFileSync("node", spawnArgs, { encoding: "utf8", timeout: 30000 })
+    return JSON.parse(result)
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
+// --- SSE ---
+
+const sseClients = new Set()
+
+function broadcastSSE(event, data) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  for (const res of sseClients) {
+    try { res.write(msg) } catch { sseClients.delete(res) }
+  }
+}
+
+// Push status + events every 5 seconds
+setInterval(() => {
+  if (sseClients.size === 0) return
+  try {
+    broadcastSSE("status", getFleetStatus())
+    broadcastSSE("events", getEventsData())
+  } catch {}
+}, 5000)
+
+// --- HTTP Server ---
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    req.on("data", c => chunks.push(c))
+    req.on("end", () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString())) }
+      catch { resolve({}) }
+    })
+    req.on("error", reject)
+  })
+}
+
+function json(res, data, status = 200) {
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+  })
+  res.end(JSON.stringify(data))
+}
+
+function text(res, data, status = 200) {
+  res.writeHead(status, {
+    "Content-Type": "text/plain",
+    "Access-Control-Allow-Origin": "*",
+  })
+  res.end(data)
+}
+
+const MIME = {
+  ".html": "text/html",
+  ".css": "text/css",
+  ".js": "application/javascript",
+  ".json": "application/json",
+  ".map": "application/json",
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`)
+  const pathname = url.pathname
+
+  // CORS preflight
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    })
+    return res.end()
+  }
+
+  try {
+    // --- Routes ---
+
+    // Root -> dashboard.html
+    if (pathname === "/" && req.method === "GET") {
+      const html = fs.readFileSync(path.join(CORE, "dashboard.html"), "utf8")
+      res.writeHead(200, { "Content-Type": "text/html" })
+      return res.end(html)
+    }
+
+    // API: fleet status
+    if (pathname === "/api/status" && req.method === "GET") {
+      return json(res, getFleetStatus())
+    }
+
+    // API: tasks
+    if (pathname === "/api/tasks" && req.method === "GET") {
+      return json(res, getTasksData())
+    }
+
+    // API: events
+    if (pathname === "/api/events" && req.method === "GET") {
+      return json(res, getEventsData())
+    }
+
+    // API: cron
+    if (pathname === "/api/cron" && req.method === "GET") {
+      return json(res, getCronData())
+    }
+
+    // API: capture agent pane
+    const paneMatch = pathname.match(/^\/api\/agents\/([^/]+)\/pane$/)
+    if (paneMatch && req.method === "GET") {
+      const result = capturePaneContent(decodeURIComponent(paneMatch[1]))
+      if (result.error) return text(res, result.content || "", result.content ? 200 : 404)
+      return text(res, result.content)
+    }
+
+    // API: send message to agent
+    const sendMatch = pathname.match(/^\/api\/agents\/([^/]+)\/send$/)
+    if (sendMatch && req.method === "POST") {
+      const body = await readBody(req)
+      const result = sendMessageToAgent(decodeURIComponent(sendMatch[1]), body.message || "")
+      return json(res, result, result.ok ? 200 : 500)
+    }
+
+    // API: spawn agent
+    if (pathname === "/api/agents/spawn" && req.method === "POST") {
+      const body = await readBody(req)
+      const result = spawnAgent(body)
+      return json(res, result, result.ok === false ? 500 : 200)
+    }
+
+    // SSE: event stream
+    if (pathname === "/api/stream" && req.method === "GET") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      })
+      res.write(`event: status\ndata: ${JSON.stringify(getFleetStatus())}\n\n`)
+      sseClients.add(res)
+      req.on("close", () => sseClients.delete(res))
+      return
+    }
+
+    // Serve node_modules (for xterm CSS/JS)
+    if (pathname.startsWith("/node_modules/")) {
+      const filePath = path.join(NODE_MODULES, pathname.slice("/node_modules/".length))
+      const safePath = path.resolve(filePath)
+      if (!safePath.startsWith(NODE_MODULES)) {
+        res.writeHead(403)
+        return res.end("Forbidden")
+      }
+      if (fs.existsSync(safePath)) {
+        const ext = path.extname(safePath)
+        const contentType = MIME[ext] || "application/octet-stream"
+        res.writeHead(200, { "Content-Type": contentType })
+        return res.end(fs.readFileSync(safePath))
+      }
+    }
+
+    // 404
+    res.writeHead(404, { "Content-Type": "text/plain" })
+    res.end("Not found")
+
+  } catch (e) {
+    console.error(`[dashboard] Error handling ${req.method} ${pathname}:`, e.message)
+    res.writeHead(500, { "Content-Type": "text/plain" })
+    res.end("Internal server error")
+  }
+})
+
+server.listen(PORT, () => {
+  console.log(`OpenFleet Dashboard: http://localhost:${PORT}`)
+  console.log(`State dir: ${STATE_ROOT}`)
+})
+
+process.on("SIGINT", () => process.exit(0))
+process.on("SIGTERM", () => process.exit(0))
