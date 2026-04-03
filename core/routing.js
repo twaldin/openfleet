@@ -13,6 +13,7 @@ function normalizeServerArchitecture(architecture = {}) {
     server_name: architecture.server_name || 'OpenFleet',
     categories: Array.isArray(architecture.categories) ? architecture.categories : [],
     status_channel: architecture.status_channel || null,
+    tasks_channel: architecture.tasks_channel || null,
     blocker_channel: architecture.blocker_channel || null,
     approval_channel: architecture.approval_channel || null,
   }

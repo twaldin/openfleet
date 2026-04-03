@@ -276,10 +276,12 @@ async function pollPermissions() {
       })
   } catch { return }
 
+  // Windows to skip — orchestrator + gateway don't need permission prompts in Discord
+  const SKIP_WINDOWS = new Set(["gateway", "cairn"])
+
   for (const { index: winIndex, name: windowName } of windowEntries) {
     if (pendingPrompts.has(windowName)) continue
-    // Skip the gateway's own window
-    if (windowName === "gateway") continue
+    if (SKIP_WINDOWS.has(windowName)) continue
 
     let paneText
     try {
@@ -297,9 +299,8 @@ async function pollPermissions() {
     const hash = paneHash(clean)
     if (resolvedHashes.has(hash)) continue
 
-    // Find the channel for this agent
-    const agentChannelName = channelIdToName[config.channels?.[windowName]] ? windowName : null
-    const channelId = config.channels?.[windowName] || config.channels?.["fleet-status"]
+    // Find the channel for this agent — use agent's own channel, fall back to #alerts (never #cairn or #fleet-status)
+    const channelId = agentToChannelId[windowName] || config.channels?.[windowName] || config.channels?.["alerts"]
     if (!channelId) continue
 
     const { tool, context } = extractPromptDetails(clean)
@@ -391,6 +392,20 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "openfleet_create_thread",
+      description: "Create a thread in a channel for an ephemeral agent task. Use for coders/evaluators so each task gets isolated discussion.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "Parent channel ID (e.g. #code-status)" },
+          agent_name: { type: "string" },
+          task: { type: "string", description: "Task title (becomes thread name)" },
+          model: { type: "string" },
+        },
+        required: ["channel_id", "agent_name"],
+      },
+    },
+    {
       name: "openfleet_archive_channel",
       description: "Archive a Discord channel when an agent completes.",
       inputSchema: {
@@ -475,6 +490,33 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2))
 
         return { content: [{ type: "text", text: `created channel ${channel.id} (#${agentName})` }] }
+      }
+
+      case "openfleet_create_thread": {
+        const parentCh = await client.channels.fetch(args.channel_id)
+        const threadName = args.task ? `${args.agent_name}: ${args.task}`.slice(0, 100) : args.agent_name
+        const thread = await parentCh.threads.create({
+          name: threadName,
+          autoArchiveDuration: 1440, // 24 hours
+          reason: `OpenFleet agent: ${args.agent_name}`,
+        })
+
+        const AGENT_COLORS = { coder: 0x5865F2, researcher: 0xED7D31, evaluator: 0xED4245, persistent: 0x57F287, monitor: 0x57F287 }
+        const embed = new EmbedBuilder()
+          .setTitle(`${args.agent_name} started`)
+          .setColor(AGENT_COLORS[args.agent_type] || 0x5865F2)
+          .addFields({ name: "Task", value: args.task || "(none)", inline: false })
+        if (args.model) embed.addFields({ name: "Model", value: args.model, inline: true })
+        embed.setTimestamp()
+        await thread.send({ embeds: [embed] })
+
+        // Register thread as agent's channel for routing
+        config.channels[args.agent_name] = thread.id
+        channelIdToName[thread.id] = args.agent_name
+        agentToChannelId[args.agent_name] = thread.id
+        writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2))
+
+        return { content: [{ type: "text", text: `created thread ${thread.id} (${threadName}) in <#${args.channel_id}>` }] }
       }
 
       case "openfleet_archive_channel": {
@@ -676,9 +718,10 @@ function buildStatusEmbed() {
     .setDescription(`Updated <t:${Math.floor(Date.now() / 1000)}:R>`)
 
   // Orchestrator
+  const orchChannel = agentChannelMention("cairn")
   embed.addFields({
     name: "Orchestrator",
-    value: `🟢 **cairn** — ${orch.harness || "?"}/${orch.model || "?"}`,
+    value: `🟢 **cairn**${orchChannel} — ${orch.harness || "?"}/${orch.model || "?"}`,
     inline: false,
   })
 

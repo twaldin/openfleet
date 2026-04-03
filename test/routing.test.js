@@ -10,10 +10,10 @@ test('deployment exposes persistent agent channel mappings', () => {
 
   assert.equal(deployment.routing.assistant_channel, 'channel://cairn')
   assert.equal(deployment.routing.persistent_agent_channels.coder, 'channel://code-status')
-  assert.equal(deployment.routing.persistent_agent_channels['stock-monitor'], 'channel://investing')
+  assert.equal(deployment.routing.persistent_agent_channels['stock-monitor'], 'channel://stock-monitor')
   assert.equal(deployment.routing.server_architecture.server_name, 'OpenFleet')
   assert.equal(deployment.routing.server_architecture.status_channel, 'channel://fleet-status')
-  assert.deepEqual(deployment.routing.server_architecture.categories.map((category) => category.name), ['control-plane', 'workers'])
+  assert.deepEqual(deployment.routing.server_architecture.categories.map((category) => category.name), ['control-plane', 'agents', 'reports'])
 })
 
 test('resolveChannelBinding prefers persistent agent channels before default human channel', () => {
@@ -54,12 +54,11 @@ test('deployment exposes clean Discord server channel architecture', () => {
   const deployment = loadDeploymentConfig(path.join(__dirname, '..', 'examples', 'cairn', 'deployment.json'))
   const architecture = deployment.routing.server_architecture
 
-  assert.equal(architecture.blocker_channel, 'channel://fleet-blockers')
-  assert.equal(architecture.approval_channel, 'channel://fleet-approvals')
+  assert.equal(architecture.tasks_channel, 'channel://tasks')
   assert.deepEqual(architecture.categories[0].channels, [
     'channel://cairn',
     'channel://fleet-status',
-    'channel://fleet-blockers',
-    'channel://fleet-approvals',
+    'channel://tasks',
+    'channel://alerts',
   ])
 })
