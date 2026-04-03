@@ -105,15 +105,18 @@ html, body {
 /* Main grid */
 .main {
   display: grid;
-  grid-template-columns: 260px 1fr;
-  grid-template-rows: 1fr 260px;
+  grid-template-columns: 260px 1fr 1fr;
+  grid-template-rows: 1fr 280px;
+  grid-template-areas:
+    "sidebar pane pane"
+    "sidebar tasks events";
   overflow: hidden;
   min-height: 0;
 }
 
 /* Sidebar: agent list */
 .sidebar {
-  grid-row: 1 / 3;
+  grid-area: sidebar;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -238,6 +241,7 @@ html, body {
 
 /* Pane viewer */
 .pane-area {
+  grid-area: pane;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -321,6 +325,7 @@ html, body {
 
 /* Bottom row: tasks + events */
 .bottom-left {
+  grid-area: tasks;
   border-top: 1px solid var(--border);
   border-right: 1px solid var(--border);
   display: flex;
@@ -329,6 +334,7 @@ html, body {
 }
 
 .bottom-right {
+  grid-area: events;
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
