@@ -357,6 +357,29 @@ async function runWizard(rl) {
     console.log(`  Discord:     not configured (run 'openfleet init' again to add)`)
   }
 
+  // Symlink openfleet CLI to user bin
+  const openfleetBin = path.resolve(__dirname, "openfleet")
+  const userBinDirs = [
+    path.join(os.homedir(), ".local", "bin"),
+    path.join(os.homedir(), "bin"),
+    "/usr/local/bin",
+  ]
+  let linked = false
+  for (const dir of userBinDirs) {
+    const target = path.join(dir, "openfleet")
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      try { fs.unlinkSync(target) } catch {}
+      fs.symlinkSync(openfleetBin, target)
+      console.log(`  CLI:         symlinked to ${target}`)
+      linked = true
+      break
+    } catch {}
+  }
+  if (!linked) {
+    console.log(`  CLI:         add ${path.dirname(openfleetBin)} to your PATH`)
+  }
+
   console.log()
   console.log("Next steps:")
   console.log("  1. Review and customize ~/.openfleet/deployment.json")
