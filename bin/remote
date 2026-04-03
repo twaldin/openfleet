@@ -1,0 +1,33 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { executeRemoteAction } = require("../core/remote")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [adapter, action] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+
+  const result = executeRemoteAction({
+    adapter,
+    action,
+    stateRoot,
+    args: {
+      channel: args.channel,
+      source: args.source || (action === 'post' ? 'system' : 'openfleet'),
+      message: args.message || args._.slice(2).join(' '),
+      agent: args.agent || null,
+      channelBinding: args['channel-binding'] || null,
+    },
+  })
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

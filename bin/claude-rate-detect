@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+
+const { execFileSync } = require("child_process")
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+const { upsertProfile } = require("../core/runtime/profiles")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const session = args.session || "claudecord"
+  const window = args.window || "cairn"
+  const profileId = args.profile || "claude-opus-orchestrator"
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const pane = `${session}:${window}`
+  const output = execFileSync("tmux", ["capture-pane", "-pt", pane, "-S", "-120"], { encoding: "utf8" })
+
+  const rateLine = output.split("\n").find((line) => line.includes("You're out of extra usage"))
+  if (!rateLine) {
+    const profile = upsertProfile(stateRoot, {
+      profile_id: profileId,
+      harness: "claude-code",
+      provider: "anthropic",
+      status: "available",
+      source: "claude-ui-detection",
+      cool_down_until: null,
+      reason: null,
+    })
+    createEventStore(stateRoot).append({ type: "profile.updated", agent_id: "openfleet", payload: profile })
+    return print(profile)
+  }
+
+  const until = parseResetTime(rateLine)
+  const profile = upsertProfile(stateRoot, {
+    profile_id: profileId,
+    harness: "claude-code",
+    provider: "anthropic",
+    status: "rate_limited",
+    source: "claude-ui-detection",
+    reason: "out_of_extra_usage",
+    cool_down_until: until,
+  })
+  createEventStore(stateRoot).append({ type: "profile.rate_limited", agent_id: "openfleet", payload: profile })
+  return print(profile)
+}
+
+function parseResetTime(line) {
+  const match = line.match(/resets\s+(.+)$/i)
+  return match ? match[1].trim() : null
+}
+
+function print(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

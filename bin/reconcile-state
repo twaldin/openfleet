@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+
+const os = require('os')
+const path = require('path')
+const { listTasks, updateTask } = require('../core/runtime/tasks')
+const { getWorkflow } = require('../core/runtime/workflows')
+const { createEventStore } = require('../core/runtime/events')
+
+function main() {
+  const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
+  const eventStore = createEventStore(stateRoot)
+  const updated = []
+
+  for (const task of listTasks(stateRoot)) {
+    if (!task.workflow_id) continue
+    const workflow = getWorkflow(stateRoot, task.workflow_id)
+    if (!workflow) continue
+
+    if (workflow.status === 'completed' && task.status !== 'completed') {
+      const next = updateTask(stateRoot, task.id, { status: 'completed' })
+      eventStore.append({ type: 'task.updated', agent_id: next.assignee || 'openfleet', payload: next })
+      updated.push(next)
+    }
+    if (workflow.status === 'active' && task.status === 'created') {
+      const next = updateTask(stateRoot, task.id, { status: 'active' })
+      eventStore.append({ type: 'task.updated', agent_id: next.assignee || 'openfleet', payload: next })
+      updated.push(next)
+    }
+  }
+
+  process.stdout.write(`${JSON.stringify({ ok: true, updated }, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

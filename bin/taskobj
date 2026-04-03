@@ -1,0 +1,46 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+const { createTask, getTask, listTasks, updateTask } = require("../core/runtime/tasks")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [command, id] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const eventStore = createEventStore(stateRoot)
+
+  if (command === "create") {
+    const task = createTask(stateRoot, {
+      title: args.title,
+      source: parseJson(args.source),
+      status: args.status,
+      assignee: args.assignee,
+      workflow_id: args.workflow,
+      channel_binding: args.channel,
+    })
+    eventStore.append({ type: "task.created", agent_id: task.assignee || "openfleet", payload: task })
+    return print(task)
+  }
+  if (command === "update") {
+    const task = updateTask(stateRoot, id, {
+      status: args.status,
+      assignee: args.assignee,
+      workflow_id: args.workflow,
+      blocker_ids: parseJson(args.blockers) || undefined,
+      approval_ids: parseJson(args.approvals) || undefined,
+      channel_binding: args.channel || undefined,
+    })
+    eventStore.append({ type: "task.updated", agent_id: task.assignee || "openfleet", payload: task })
+    return print(task)
+  }
+  if (command === "show") return print(getTask(stateRoot, id))
+  if (command === "list") return print(listTasks(stateRoot))
+  throw new Error("Usage: taskobj <create|update|show|list>")
+}
+
+function parseJson(v) { return v ? JSON.parse(v) : null }
+function print(v) { process.stdout.write(`${JSON.stringify(v, null, 2)}\n`) }
+try { main() } catch (e) { console.error(e.message); process.exit(1) }

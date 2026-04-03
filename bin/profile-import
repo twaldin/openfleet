@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+const { upsertProfile } = require("../core/runtime/profiles")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const file = args.file || args._[0]
+  if (!file) {
+    throw new Error("Usage: profile-import <runtime-profiles.json>")
+  }
+
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const eventStore = createEventStore(stateRoot)
+  const data = JSON.parse(fs.readFileSync(path.resolve(file), "utf8"))
+  const profiles = Array.isArray(data) ? data : data.profiles || []
+
+  const imported = []
+  for (const profile of profiles) {
+    const saved = upsertProfile(stateRoot, profile)
+    eventStore.append({ type: "profile.updated", agent_id: "openfleet", payload: saved })
+    imported.push(saved)
+  }
+
+  process.stdout.write(`${JSON.stringify(imported, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

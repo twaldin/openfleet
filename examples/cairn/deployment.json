@@ -11,13 +11,49 @@
     "agent": "cairn",
     "sessionScript": "/Users/twaldin/.cairn/system/bin/cairn_session"
   },
+  "routing": {
+    "assistant_channel": "channel://lifeos",
+    "default_human_channel": "channel://lifeos",
+    "direct_message_policy": "agent-channel-preferred",
+    "server_architecture": {
+      "server_name": "OpenFleet",
+      "status_channel": "channel://fleet-status",
+      "blocker_channel": "channel://fleet-blockers",
+      "approval_channel": "channel://fleet-approvals",
+      "categories": [
+        {
+          "name": "control-plane",
+          "channels": [
+            "channel://lifeos",
+            "channel://fleet-status",
+            "channel://fleet-blockers",
+            "channel://fleet-approvals"
+          ]
+        },
+        {
+          "name": "workers",
+          "channels": [
+            "channel://code-status",
+            "channel://alerts",
+            "channel://investing"
+          ]
+        }
+      ]
+    },
+    "persistent_agent_channels": {
+      "coder": "channel://code-status",
+      "monitor": "channel://alerts",
+      "stock-monitor": "channel://investing",
+      "evaluator": "channel://code-status"
+    }
+  },
   "jobs": {
     "morning": {
       "prompt": [
         "Morning briefing. Read WORKING.md + core.md + tasks.md. Run `/Users/twaldin/.cairn/system/bin/read_calendar 3` and `/Users/twaldin/.cairn/system/bin/smart_mail 15`.",
         "",
         "Send the briefing to Discord `#daily` using:",
-        "`/Users/twaldin/claudecord/scripts/reply_discord \"...\" --channel 1485084342073163957`",
+        "`node /Users/twaldin/openfleet/bin/remote discord post --channel 1485084342073163957 --message \"...\"`",
         "",
         "Include:",
         "- day plan",
@@ -56,7 +92,7 @@
     },
     "nightly_reflection": {
       "prompt": [
-        "Nightly reflection. Review the day's activity, update WORKING.md/core.md/tasks.md as needed, and send a short reflection summary to `#daily` using `/Users/twaldin/claudecord/scripts/reply_discord` with channel `1485084342073163957`.",
+        "Nightly reflection. Review the day's activity, update WORKING.md/core.md/tasks.md as needed, and send a short reflection summary to `#daily` using `node /Users/twaldin/openfleet/bin/remote discord post --channel 1485084342073163957 --message \"...\"`.",
         "",
         "After the summary, keep context lean and pause for the next scheduled work. Do not break the live Discord path."
       ]

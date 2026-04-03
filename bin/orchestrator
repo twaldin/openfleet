@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+
+const { execFileSync } = require("child_process")
+const os = require("os")
+const path = require("path")
+const { parseArgs, request } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+const { getProfile, upsertProfile } = require("../core/runtime/profiles")
+const { saveActiveOrchestrator, loadActiveOrchestrator } = require("../core/runtime/orchestrator")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [command] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const eventStore = createEventStore(stateRoot)
+
+  if (command === "launch-codex-cairn") {
+    const tmuxSession = args.session || "openfleet"
+    const tmuxWindow = args.window || "cairn-codex"
+    const workdir = args.dir || "/Users/twaldin/cairn"
+    const model = args.model || "gpt-5.4"
+    const promptFile = args.prompt || "/Users/twaldin/cairn/CODEX_CAIRN_BOOTSTRAP.md"
+    const profileId = args.profile || "codex-gpt54-orchestrator"
+
+    ensureTmuxSession(tmuxSession)
+    recreateWindow(tmuxSession, tmuxWindow, workdir, model)
+    bootstrapCodexPane(tmuxSession, tmuxWindow, promptFile)
+
+    const profile = upsertProfile(stateRoot, {
+      ...(getProfile(stateRoot, profileId) || {}),
+      profile_id: profileId,
+      harness: "codex",
+      provider: "openai",
+      model,
+      host: "macbook",
+      role: "orchestrator",
+      status: "available",
+      active: true,
+      source: "orchestrator-launch",
+    })
+
+    const active = {
+      profile_id: profileId,
+      harness: "codex",
+      tmux_session: tmuxSession,
+      tmux_window: tmuxWindow,
+      workdir,
+      model,
+      prompt_file: promptFile,
+      activated_at: new Date().toISOString(),
+    }
+    saveActiveOrchestrator(stateRoot, active)
+    eventStore.append({ type: "orchestrator.activated", agent_id: "cairn", payload: active })
+    return print({ ok: true, profile, active })
+  }
+
+  if (command === "show") {
+    return print(loadActiveOrchestrator(stateRoot))
+  }
+
+  if (command === "send") {
+    const active = loadActiveOrchestrator(stateRoot)
+    if (!active) throw new Error("No active orchestrator registered")
+    const message = args.message || args._.slice(1).join(" ")
+    if (!message) throw new Error("Usage: orchestrator send --message <text>")
+    sendToOrchestrator(active, message)
+    eventStore.append({
+      type: "orchestrator.prompted",
+      agent_id: "cairn",
+      payload: {
+        profile_id: active.profile_id,
+        tmux_session: active.tmux_session,
+        tmux_window: active.tmux_window,
+        message,
+      },
+    })
+    return print({ ok: true, active, message })
+  }
+
+  throw new Error("Usage: orchestrator <launch-codex-cairn|show|send>")
+}
+
+function ensureTmuxSession(name) {
+  try {
+    execFileSync("tmux", ["has-session", "-t", name], { stdio: "ignore" })
+  } catch {
+    execFileSync("tmux", ["new-session", "-d", "-s", name, "-n", "bootstrap"], { stdio: "ignore" })
+  }
+}
+
+function recreateWindow(session, window, workdir, model) {
+  try {
+    execFileSync("tmux", ["kill-window", "-t", `${session}:${window}`], { stdio: "ignore" })
+  } catch {
+    // ignore
+  }
+  execFileSync("tmux", [
+    "new-window",
+    "-t", session,
+    "-n", window,
+    "-c", workdir,
+    `codex -m ${model} -C ${workdir} --no-alt-screen`,
+  ], { stdio: "ignore", shell: true })
+}
+
+function bootstrapCodexPane(session, window, promptFile) {
+  sleep(2000)
+  const paneText = capturePane(session, window)
+  if (paneText.includes("Do you trust the contents of this directory?")) {
+    execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "1", "Enter"], { stdio: "ignore" })
+    sleep(1000)
+  }
+  execFileSync("tmux", ["load-buffer", promptFile], { stdio: "ignore" })
+  execFileSync("tmux", ["paste-buffer", "-t", `${session}:${window}`], { stdio: "ignore" })
+  execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "Enter"], { stdio: "ignore" })
+  sleep(300)
+  execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "Enter"], { stdio: "ignore" })
+}
+
+function sendToOrchestrator(active, message) {
+  if (active.harness === 'opencode') {
+    const baseUrl = process.env.OPENCODE_URL || 'http://127.0.0.1:4096'
+    return request(baseUrl, 'POST', `/session/${active.session_id}/prompt_async`, {
+      directory: active.workdir,
+      body: {
+        parts: [{ type: 'text', text: message }],
+      },
+    })
+  }
+  return sendToPane(active.tmux_session, active.tmux_window, message)
+}
+
+function sendToPane(session, window, message) {
+  execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "-l", message], { stdio: "ignore" })
+  execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "Enter"], { stdio: "ignore" })
+}
+
+function capturePane(session, window) {
+  return execFileSync("tmux", ["capture-pane", "-pt", `${session}:${window}`, "-S", "-80"], { encoding: "utf8" })
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function print(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

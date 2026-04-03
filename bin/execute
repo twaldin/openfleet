@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { executeJob } = require("../core/execute")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [jobId] = args._
+  if (!jobId) throw new Error("Usage: execute <job-id>")
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const result = executeJob(stateRoot, jobId)
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

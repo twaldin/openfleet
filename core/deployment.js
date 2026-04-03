@@ -1,6 +1,7 @@
 const fs = require("fs")
 const os = require("os")
 const path = require("path")
+const { normalizeRouting } = require("./routing")
 
 function resolvePath(baseDir, value) {
   if (!value) return value
@@ -57,6 +58,7 @@ function loadDeploymentConfig(configPath) {
       agent: parsed.parent?.agent || "cairn",
       sessionScript: resolvePath(configDir, parsed.parent?.sessionScript || ""),
     },
+    routing: normalizeRouting(parsed.routing || {}),
     jobs: Object.fromEntries(
       Object.entries(parsed.jobs || {}).map(([name, job]) => [name, normalizeJob(job)]),
     ),

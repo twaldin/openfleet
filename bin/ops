@@ -3,7 +3,12 @@
 const os = require("os")
 const path = require("path")
 const { parseArgs } = require("../lib/opencode")
-const { defaultStateRoot, fetchSessionMessages, inspectAgent, listAgentMetadata, renderMessages } = require("../core/ops")
+const { buildCaptureSurface, buildDashboard, buildDashboardSurface, buildFollowSurface, buildSummary, defaultStateRoot, fetchSessionMessages, inspectAgent, listAgentMetadata, renderListSurface, renderMessages } = require("../core/ops")
+const { listJobs, getJob } = require("../core/runtime/jobs")
+const { listWorkflows, getWorkflow } = require("../core/runtime/workflows")
+const { listTasks, getTask } = require("../core/runtime/tasks")
+const { listBlockers, getBlocker } = require("../core/runtime/blockers")
+const { listApprovals, getApproval } = require("../core/runtime/approvals")
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
@@ -21,6 +26,13 @@ async function main() {
       const items = listAgentMetadata(stateRoot)
       return output(items, json)
     }
+    case "dashboard": {
+      return output(buildDashboard(stateRoot), json, { surface: buildDashboardSurface(stateRoot) })
+    }
+    case "summary": {
+      process.stdout.write(`${buildSummary(stateRoot)}\n`)
+      return
+    }
     case "inspect": {
       if (!target) throw new Error("Usage: ops inspect <agent>")
       const result = inspectAgent(stateRoot, target, limit)
@@ -31,7 +43,10 @@ async function main() {
       if (!target) throw new Error(`Usage: ops ${subcommand} <agent>`) 
       const { metadata } = inspectAgent(stateRoot, target, limit)
       const messages = await fetchSessionMessages({ metadata, host, port, serverStateDir, serverLogDir })
-      return output({ metadata, messages: renderMessages(messages, limit) }, json)
+      const rendered = renderMessages(messages, limit)
+      if (json) return output({ metadata, messages: rendered }, true)
+      process.stdout.write(`${buildCaptureSurface({ metadata, messages: rendered })}\n`)
+      return
     }
     case "follow": {
       if (!target) throw new Error("Usage: ops follow <agent>")
@@ -43,7 +58,11 @@ async function main() {
         const delta = rendered.slice(lastCount)
         lastCount = rendered.length
         if (delta.length) {
-          output({ metadata, messages: delta }, json)
+          if (json) {
+            output({ metadata, messages: delta }, true)
+          } else {
+            process.stdout.write(`${buildFollowSurface({ metadata, messages: rendered, lastCount: rendered.length - delta.length })}\n`)
+          }
         }
       }
       await tick()
@@ -54,26 +73,64 @@ async function main() {
       }, 2000)
       return
     }
+    case "jobs": {
+      return output(listJobs(stateRoot), json)
+    }
+    case "job": {
+      if (!target) throw new Error("Usage: ops job <id>")
+      return output(getJob(stateRoot, target), json)
+    }
+    case "workflows": {
+      return output(listWorkflows(stateRoot), json)
+    }
+    case "workflow": {
+      if (!target) throw new Error("Usage: ops workflow <id>")
+      return output(getWorkflow(stateRoot, target), json)
+    }
+    case "tasks": {
+      return output(listTasks(stateRoot), json)
+    }
+    case "task": {
+      if (!target) throw new Error("Usage: ops task <id>")
+      return output(getTask(stateRoot, target), json)
+    }
+    case "blockers": {
+      return output(listBlockers(stateRoot), json)
+    }
+    case "blocker": {
+      if (!target) throw new Error("Usage: ops blocker <id>")
+      return output(getBlocker(stateRoot, target), json)
+    }
+    case "approvals": {
+      return output(listApprovals(stateRoot), json)
+    }
+    case "approval": {
+      if (!target) throw new Error("Usage: ops approval <id>")
+      return output(getApproval(stateRoot, target), json)
+    }
     default:
-      throw new Error("Usage: ops <agents|inspect|tail|follow|capture> [agent] [--json] [--limit N]")
+      throw new Error("Usage: ops <dashboard|summary|agents|inspect|tail|follow|capture|jobs|job|workflows|workflow|tasks|task|blockers|blocker|approvals|approval> [target] [--json] [--limit N]")
   }
 }
 
-function output(value, json) {
+function output(value, json, options = {}) {
   if (json) {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
     return
   }
 
+  if (options.surface) {
+    process.stdout.write(`${options.surface}\n`)
+    return
+  }
+
   if (Array.isArray(value)) {
-    for (const item of value) {
-      process.stdout.write(`${item.name}\t${item.agentProfile || "-"}\t${item.sessionID || "-"}\t${item.updated || "-"}\n`)
-    }
+    process.stdout.write(`${renderListSurface(value)}\n`)
     return
   }
 
   if (value.metadata && value.messages) {
-    process.stdout.write(`agent=${value.metadata.name} session=${value.metadata.sessionID || "-"} model=${value.metadata.agentProfile || "-"}\n`)
+    process.stdout.write(`agent=${value.metadata.name} session=${value.metadata.sessionID || "-"} model=${value.metadata.agentProfile || "-"} location=${value.metadata.location || "-"} host=${value.metadata.host || "-"} baseUrl=${value.metadata.baseUrl || "-"}\n`)
     for (const msg of value.messages) {
       process.stdout.write(`\n[${msg.role || "unknown"}] provider=${msg.provider || "-"} model=${msg.model || "-"} finish=${msg.finish || "-"}\n`)
       if (msg.text) {
@@ -86,6 +143,11 @@ function output(value, json) {
   }
 
   if (value.metadata && value.events) {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+    return
+  }
+
+  if (value.counts && value.agents) {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
     return
   }

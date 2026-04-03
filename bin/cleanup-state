@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+
+const os = require('os')
+const path = require('path')
+const { createEventStore } = require('../core/runtime/events')
+const { listTasks, updateTask } = require('../core/runtime/tasks')
+const { listBlockers, updateBlocker } = require('../core/runtime/blockers')
+const { listApprovals, updateApproval } = require('../core/runtime/approvals')
+const { listWorkflows, updateWorkflow } = require('../core/runtime/workflows')
+const { listJobs, updateJob } = require('../core/runtime/jobs')
+
+function main() {
+  const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
+  const eventStore = createEventStore(stateRoot)
+
+  const testThreadPrefixes = [
+    'thread://task-test',
+    'thread://approval-test',
+    'thread://approval-test-2',
+    'thread://approval-flow-test',
+    'thread://blocked-test',
+    'thread://status-blocker',
+    'thread://status-blocker-2',
+    'thread://status-blocker-3',
+    'thread://status-approval',
+    'thread://status-approval-2',
+    'thread://status-approval-3',
+    'thread://fresh-linkage',
+    'thread://resolve-final-a',
+    'thread://resolve-final-b',
+    'thread://resolve-final-b2',
+  ]
+
+  const isTestChannel = (value) => !!value && testThreadPrefixes.some((prefix) => String(value).startsWith(prefix))
+  const isTestGoal = (value) => value && ['smoke execution', 'completion smoke', 'auto continue smoke', 'auto continue smoke 2'].includes(String(value))
+
+  const updates = { tasks: 0, blockers: 0, approvals: 0, workflows: 0, jobs: 0 }
+
+  for (const task of listTasks(stateRoot)) {
+    if (isTestChannel(task.channel_binding) || isTestGoal(task.title)) {
+      updateTask(stateRoot, task.id, { status: 'archived' })
+      updates.tasks += 1
+    }
+  }
+
+  for (const blocker of listBlockers(stateRoot)) {
+    if (isTestChannel(blocker.channel_binding) || (!blocker.channel_binding && blocker.summary === 'Need answer' && blocker.question === 'Which repo?')) {
+      updateBlocker(stateRoot, blocker.id, { status: blocker.status === 'open' ? 'archived' : blocker.status })
+      updates.blockers += 1
+    }
+  }
+
+  for (const approval of listApprovals(stateRoot)) {
+    if (isTestChannel(approval.channel_binding)) {
+      updateApproval(stateRoot, approval.id, { status: approval.status === 'pending' ? 'archived' : approval.status })
+      updates.approvals += 1
+    }
+  }
+
+  for (const workflow of listWorkflows(stateRoot)) {
+    if (isTestGoal(workflow.context?.goal)) {
+      updateWorkflow(stateRoot, workflow.id, { status: workflow.status === 'active' ? 'archived' : workflow.status })
+      updates.workflows += 1
+    }
+  }
+
+  for (const job of listJobs(stateRoot)) {
+    if (isTestGoal(job.input?.context?.goal)) {
+      updateJob(stateRoot, job.id, { status: ['running', 'dispatched', 'assigned', 'queued'].includes(job.status) ? 'archived' : job.status })
+      updates.jobs += 1
+    }
+  }
+
+  eventStore.append({ type: 'state.cleanup', agent_id: 'openfleet', payload: updates })
+  process.stdout.write(`${JSON.stringify({ ok: true, updates }, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

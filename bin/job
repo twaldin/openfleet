@@ -1,0 +1,111 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+const { createJob, getJob, listJobs, updateJob } = require("../core/runtime/jobs")
+const { advanceWorkflow, getWorkflow } = require("../core/runtime/workflows")
+const { dispatchJob } = require("../core/dispatch")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [command, id] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const eventStore = createEventStore(stateRoot)
+
+  if (command === "create") {
+    const job = createJob(stateRoot, {
+      type: args.type,
+      status: args.status,
+      agent: args.agent,
+      workflow_id: args.workflow,
+      trigger: args.trigger,
+      input: parseJson(args.input),
+    })
+    eventStore.append({ type: "job.created", agent_id: args.agent || "system", payload: job })
+    return print(job)
+  }
+
+  if (command === "update") {
+    if (!id) throw new Error("Usage: job update <id>")
+    const job = updateJob(stateRoot, id, {
+      status: args.status,
+      agent: args.agent,
+      output: parseJson(args.output),
+    })
+    eventStore.append({ type: "job.updated", agent_id: job.agent || "system", payload: job })
+    return print(job)
+  }
+
+  if (command === "complete") {
+    if (!id) throw new Error("Usage: job complete <id>")
+    const job = updateJob(stateRoot, id, {
+      status: args.status || "completed",
+      output: parseJson(args.output),
+      completed_at: new Date().toISOString(),
+    })
+    eventStore.append({ type: "job.completed", agent_id: job.agent || "system", payload: job })
+
+    if (args.continue && job.workflow_id) {
+      const workflow = getWorkflow(stateRoot, job.workflow_id)
+      if (workflow && workflow.status === "active") {
+        const advanced = advanceWorkflow(stateRoot, workflow.id)
+        eventStore.append({ type: "workflow.updated", agent_id: "openfleet", payload: advanced })
+        const step = advanced.current_step
+        if (!step) {
+          return print({ job, workflow: advanced, next: null })
+        }
+        const [agent, action] = step.split(".", 2)
+        const dispatched = dispatchJob(stateRoot, {
+          type: step,
+          agent,
+          workflow_id: advanced.id,
+          trigger: "workflow-complete",
+          role: agent,
+          input: {
+            step,
+            action,
+            workflow_id: advanced.id,
+            context: advanced.context,
+          },
+        })
+        if (args.execute) {
+          const { executeJob } = require("../core/execute")
+          const executed = executeJob(stateRoot, dispatched.job.id)
+          return print({ job, workflow: advanced, next: executed })
+        }
+        return print({ job, workflow: advanced, next: dispatched })
+      }
+    }
+
+    return print(job)
+  }
+
+  if (command === "show") {
+    if (!id) throw new Error("Usage: job show <id>")
+    return print(getJob(stateRoot, id))
+  }
+
+  if (command === "list") {
+    return print(listJobs(stateRoot))
+  }
+
+  throw new Error("Usage: job <create|update|complete|show|list>")
+}
+
+function parseJson(value) {
+  if (!value) return null
+  return JSON.parse(value)
+}
+
+function print(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

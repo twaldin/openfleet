@@ -1,0 +1,75 @@
+#!/usr/bin/env node
+
+const os = require('os')
+const path = require('path')
+const { listTasks, updateTask } = require('../core/runtime/tasks')
+const { createWorkflow, advanceWorkflow } = require('../core/runtime/workflows')
+const { createEventStore } = require('../core/runtime/events')
+const { dispatchJob } = require('../core/dispatch')
+const { executeJob } = require('../core/execute')
+
+function main() {
+  const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
+  const tasks = listTasks(stateRoot)
+  const candidate = tasks.find((task) => task.source?.type === 'implementation_backlog' && !task.workflow_id && task.status === 'created')
+  if (!candidate) {
+    process.stdout.write(JSON.stringify({ ok: true, picked: null, reason: 'no_runnable_backlog_task' }, null, 2) + '\n')
+    return
+  }
+
+  const workflow = createWorkflow(stateRoot, {
+    type: 'openfleet-implementation',
+    status: 'created',
+    steps: ['coder.fix', 'evaluator.review'],
+    context: {
+      task_id: candidate.id,
+      task_title: candidate.title,
+      source: candidate.source,
+      channel_binding: candidate.channel_binding,
+      repo: candidate.source?.repo || 'twaldin/openfleet',
+      goal: candidate.title,
+    },
+  })
+
+  const task = updateTask(stateRoot, candidate.id, {
+    workflow_id: workflow.id,
+    status: 'active',
+  })
+
+  const eventStore = createEventStore(stateRoot)
+  eventStore.append({ type: 'workflow.created', agent_id: task.assignee || 'openfleet', payload: workflow })
+  eventStore.append({ type: 'task.updated', agent_id: task.assignee || 'openfleet', payload: task })
+
+  const advanced = advanceWorkflow(stateRoot, workflow.id)
+  eventStore.append({ type: 'workflow.updated', agent_id: 'openfleet', payload: advanced })
+  const step = advanced.current_step
+  if (!step) {
+    process.stdout.write(JSON.stringify({ ok: true, task, workflow: advanced, next: null }, null, 2) + '\n')
+    return
+  }
+
+  const [agent, action] = step.split('.', 2)
+  const dispatched = dispatchJob(stateRoot, {
+    type: step,
+    agent,
+    workflow_id: advanced.id,
+    trigger: 'backlog-runner',
+    role: agent,
+    preferred_profile: candidate.source?.type === 'implementation_backlog' && agent === 'coder' ? 'opencode-gpt54-coder' : null,
+    input: {
+      step,
+      action,
+      workflow_id: advanced.id,
+      context: advanced.context,
+    },
+  })
+  const executed = executeJob(stateRoot, dispatched.job.id)
+  process.stdout.write(JSON.stringify({ ok: true, task, workflow: advanced, next: executed }, null, 2) + '\n')
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

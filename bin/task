@@ -1,0 +1,51 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { runTaskPipeline } = require("../core/task-runner")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+
+  const result = runTaskPipeline({
+    taskId: args["task-id"] || "task",
+    source: args.source || "system",
+    payloadFile: args.payload,
+    summary: args.summary || "",
+    shouldPost: Boolean(args.post),
+    postChannel: args.channel,
+    postMessage: args.message,
+    shouldIssue: Boolean(args.issue),
+    createWorkflow: args["workflow-type"] ? {
+      type: args["workflow-type"],
+      status: args["workflow-status"],
+      steps: parseJson(args["workflow-steps"]) || [],
+      context: parseJson(args["workflow-context"]) || {},
+    } : null,
+    createJob: args["job-type"] ? {
+      type: args["job-type"],
+      status: args["job-status"],
+      agent: args.agent,
+      trigger: args.trigger,
+      input: parseJson(args.input) || null,
+      workflowId: args["workflow-id"] || null,
+    } : null,
+    stateRoot,
+  })
+
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+function parseJson(value) {
+  if (!value) return null
+  return JSON.parse(value)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

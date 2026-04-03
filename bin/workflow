@@ -1,0 +1,141 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+const { advanceWorkflow, createWorkflow, getWorkflow, listWorkflows, updateWorkflow } = require("../core/runtime/workflows")
+const { dispatchJob } = require("../core/dispatch")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [command, id] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const eventStore = createEventStore(stateRoot)
+
+  if (command === "create") {
+    const workflow = createWorkflow(stateRoot, {
+      type: args.type,
+      status: args.status,
+      current_step: args.step,
+      steps: parseJson(args.steps) || [],
+      context: parseJson(args.context) || {},
+    })
+    eventStore.append({ type: "workflow.created", agent_id: "openfleet", payload: workflow })
+    return print(workflow)
+  }
+
+  if (command === "update") {
+    if (!id) throw new Error("Usage: workflow update <id>")
+    const workflow = updateWorkflow(stateRoot, id, {
+      status: args.status,
+      current_step: args.step,
+      context: parseJson(args.context) || undefined,
+    })
+    eventStore.append({ type: "workflow.updated", agent_id: "openfleet", payload: workflow })
+    return print(workflow)
+  }
+
+  if (command === "show") {
+    if (!id) throw new Error("Usage: workflow show <id>")
+    return print(getWorkflow(stateRoot, id))
+  }
+
+  if (command === "advance") {
+    if (!id) throw new Error("Usage: workflow advance <id>")
+    const workflow = advanceWorkflow(stateRoot, id)
+    eventStore.append({ type: "workflow.updated", agent_id: "openfleet", payload: workflow })
+    return print(workflow)
+  }
+
+  if (command === "spawn-next-job") {
+    if (!id) throw new Error("Usage: workflow spawn-next-job <id>")
+    const workflow = advanceWorkflow(stateRoot, id)
+    eventStore.append({ type: "workflow.updated", agent_id: "openfleet", payload: workflow })
+
+    const step = workflow.current_step
+    if (!step) {
+      return print({ workflow, job: null })
+    }
+
+    const [agent, action] = step.split(".", 2)
+    const dispatched = dispatchJob(stateRoot, {
+      type: step,
+      agent,
+      workflow_id: workflow.id,
+      trigger: "workflow",
+      role: agent,
+      input: {
+        step,
+        action,
+        workflow_id: workflow.id,
+        context: workflow.context,
+      },
+    })
+    if (args.execute) {
+      const { executeJob } = require("../core/execute")
+      const executed = executeJob(stateRoot, dispatched.job.id)
+      return print({ workflow, job: executed.job, profile: executed.profile, execution: executed.execution })
+    }
+    return print({ workflow, job: dispatched.job, profile: dispatched.profile })
+  }
+
+  if (command === "continue") {
+    if (!id) throw new Error("Usage: workflow continue <id>")
+    const workflow = getWorkflow(stateRoot, id)
+    if (!workflow) throw new Error(`Unknown workflow: ${id}`)
+    if (workflow.status === "blocked" || workflow.status === "awaiting_approval") {
+      throw new Error(`Workflow ${id} is paused (${workflow.status})`)
+    }
+
+    const step = workflow.current_step
+    if (!step) {
+      return print({ workflow, job: null, profile: null })
+    }
+
+    const [agent, action] = step.split(".", 2)
+    const dispatched = dispatchJob(stateRoot, {
+      type: step,
+      agent,
+      workflow_id: workflow.id,
+      trigger: "workflow-continue",
+      role: agent,
+      input: {
+        step,
+        action,
+        workflow_id: workflow.id,
+        context: workflow.context,
+      },
+    })
+
+    if (args.execute) {
+      const { executeJob } = require("../core/execute")
+      const executed = executeJob(stateRoot, dispatched.job.id)
+      return print({ workflow, job: executed.job, profile: executed.profile, execution: executed.execution })
+    }
+
+    return print({ workflow, job: dispatched.job, profile: dispatched.profile })
+  }
+
+  if (command === "list") {
+    return print(listWorkflows(stateRoot))
+  }
+
+  throw new Error("Usage: workflow <create|update|show|advance|spawn-next-job|continue|list>")
+}
+
+function parseJson(value) {
+  if (!value) return null
+  return JSON.parse(value)
+}
+
+function print(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

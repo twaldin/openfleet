@@ -1,0 +1,134 @@
+#!/usr/bin/env node
+
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+
+function parseArgs(argv) {
+  const args = { _: [] }
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2)
+      const next = argv[i + 1]
+      if (!next || next.startsWith("--")) {
+        args[key] = true
+      } else {
+        args[key] = next
+        i += 1
+      }
+    } else {
+      args._.push(arg)
+    }
+  }
+  return args
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const directory = args.directory
+  const title = args.title
+  const name = args.name || title
+  const baseUrl = args["base-url"]
+  const metadataFile = args["metadata-file"]
+  const canonicalFile = args["canonical-file"]
+  const workspace = args.workspace || null
+  const host = args.host || null
+  const agentProfile = args["agent-profile"] || null
+  const transport = args.transport || null
+  const initializePrompt = args["initialize-prompt"] || null
+
+  if (!directory || !title || !name || !baseUrl || !metadataFile || !canonicalFile) {
+    throw new Error("Usage: remote-session --directory <dir> --title <title> --name <name> --base-url <url> --metadata-file <path> --canonical-file <path>")
+  }
+
+  const localFile = path.resolve(metadataFile)
+  const canonFile = path.resolve(canonicalFile)
+  fs.mkdirSync(path.dirname(localFile), { recursive: true })
+  fs.mkdirSync(path.dirname(canonFile), { recursive: true })
+
+  const request = async (method, pathname, body) => {
+    const url = new URL(pathname, baseUrl)
+    url.searchParams.set("directory", directory)
+    const response = await fetch(url, {
+      method,
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`${method} ${url.pathname} failed: ${response.status} ${text}`)
+    }
+    if (response.status === 204) return null
+    return response.json()
+  }
+
+  const persist = (sessionId) => {
+    const payload = {
+      name,
+      sessionID: sessionId,
+      directory,
+      baseUrl,
+      host,
+      agentProfile,
+      workspace,
+      transport,
+    }
+    fs.writeFileSync(localFile, `${JSON.stringify(payload, null, 2)}\n`)
+    fs.writeFileSync(canonFile, `${JSON.stringify(payload, null, 2)}\n`)
+    return payload
+  }
+
+  let existingId = null
+  try {
+    existingId = JSON.parse(fs.readFileSync(localFile, "utf8")).sessionID
+  } catch {
+    existingId = null
+  }
+
+  if (existingId) {
+    try {
+      const session = await request("GET", `/session/${existingId}`)
+      if (session && !session.time?.archived) {
+        persist(existingId)
+        process.stdout.write(`${existingId}\n`)
+        return
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  let sessions = []
+  try {
+    sessions = await request("GET", "/session")
+  } catch {
+    sessions = []
+  }
+
+  const matching = sessions
+    .filter((session) => session.directory === directory && session.title === title && !session.time?.archived)
+    .sort((a, b) => (b.time?.updated || b.time?.created || 0) - (a.time?.updated || a.time?.created || 0))
+
+  if (matching[0]) {
+    persist(matching[0].id)
+    process.stdout.write(`${matching[0].id}\n`)
+    return
+  }
+
+  const created = await request("POST", "/session", { title })
+  persist(created.id)
+
+  if (initializePrompt) {
+    await request("POST", `/session/${created.id}/prompt_async`, {
+      parts: [{ type: "text", text: initializePrompt }],
+    })
+  }
+
+  process.stdout.write(`${created.id}\n`)
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})

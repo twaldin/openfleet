@@ -50,10 +50,15 @@ function saveSessionMetadata(stateDir, metadata) {
   upsertSession(registry, {
     session_id: next.sessionID || next.sessionId || next.session_id,
     name: next.name,
+    agent_id: next.agent_id || next.agentId || next.name,
+    runtime_instance_id: next.runtime_instance_id || next.runtimeInstanceId || next.name,
     directory: next.directory,
     agentProfile: next.agentProfile,
     workspace: next.workspace,
     title: next.title,
+    host: next.host,
+    baseUrl: next.baseUrl,
+    transport: next.transport,
     created_at: next.created || null,
     updated_at: next.updated_at,
   })

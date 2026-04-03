@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { createEventStore } = require("../core/runtime/events")
+const { getProfile, listProfiles, selectProfile, upsertProfile } = require("../core/runtime/profiles")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [command, id] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const eventStore = createEventStore(stateRoot)
+
+  if (command === "upsert") {
+    const profile = upsertProfile(stateRoot, {
+      profile_id: args.id || id,
+      harness: args.harness,
+      provider: args.provider,
+      model: args.model,
+      host: args.host,
+      role: args.role,
+      status: args.status,
+      reason: args.reason,
+      cool_down_until: args["cool-down-until"] || args.cool_down_until,
+      source: args.source,
+    })
+    eventStore.append({ type: "profile.updated", agent_id: "openfleet", payload: profile })
+    return print(profile)
+  }
+
+  if (command === "show") {
+    return print(getProfile(stateRoot, id))
+  }
+
+  if (command === "list") {
+    return print(listProfiles(stateRoot))
+  }
+
+  if (command === "select") {
+    const allowed = args.allowed ? String(args.allowed).split(",").filter(Boolean) : []
+    return print(selectProfile(stateRoot, {
+      allowed,
+      preferred: args.preferred,
+      role: args.role,
+      harness: args.harness,
+    }))
+  }
+
+  throw new Error("Usage: profile <upsert|show|list|select>")
+}
+
+function print(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}

@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+const { execFileSync } = require('child_process')
+const { decideContinuation } = require('../core/continuation')
+
+function main() {
+  const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
+  const decision = decideContinuation(stateRoot, { source: 'maintenance-loop' })
+  const maintenanceFile = path.join(stateRoot, 'maintenance.json')
+  const maintenanceState = loadJson(maintenanceFile) || {}
+  const result = {
+    decision,
+    nudged: null,
+    backlogStarted: null,
+    orchestratorPrompted: null,
+  }
+
+  const stalled = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/stalled-jobs', 'list'], { encoding: 'utf8' }))
+  if (stalled.length) {
+    const first = stalled[0]
+    result.nudged = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/stalled-jobs', 'nudge', first.job.id], { encoding: 'utf8' }))
+  }
+
+  const nudgeKey = stalled.length
+    ? `stalled:${stalled[0].job.id}`
+    : `decision:${decision.decision}:${decision.reason}`
+  const lastAt = maintenanceState.last_nudge_at ? Date.parse(maintenanceState.last_nudge_at) : 0
+  const ageMs = Date.now() - (Number.isNaN(lastAt) ? 0 : lastAt)
+  const shouldPrompt = (
+    (stalled.length > 0 || decision.decision === 'continue' || decision.reason === 'work_in_progress') &&
+    (maintenanceState.last_nudge_key !== nudgeKey || ageMs > 90_000)
+  )
+
+  if (shouldPrompt) {
+    const message = stalled.length
+      ? `[SYSTEM]: stalled job ${stalled[0].job.id} still has no completion/blocker. Resume the highest-value active work now, or create a blocker/report-completion if appropriate.`
+      : decision.reason === 'work_in_progress'
+        ? `[SYSTEM]: active workflow work is still in progress. Resume supervising the highest-value active task now, or create a blocker if progress is stuck.`
+      : `[SYSTEM]: continuation policy says runnable work remains. Resume the highest-value active task now, or create a blocker if blocked.`
+    result.orchestratorPrompted = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/orchestrator', 'send', '--message', message], { encoding: 'utf8' }))
+    maintenanceState.last_nudge_at = new Date().toISOString()
+    maintenanceState.last_nudge_key = nudgeKey
+    fs.writeFileSync(maintenanceFile, `${JSON.stringify(maintenanceState, null, 2)}\n`)
+  }
+
+  if (decision.decision === 'wait' && decision.reason === 'no_runnable_work') {
+    result.backlogStarted = JSON.parse(execFileSync('node', ['/Users/twaldin/openfleet/bin/backlog-runner'], { encoding: 'utf8' }))
+  }
+
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+function loadJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}
