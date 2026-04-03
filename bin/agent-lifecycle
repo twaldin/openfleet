@@ -19,12 +19,14 @@ function main() {
   if (command === "respawn") return respawnDormant(args)
   if (command === "compact") return compactAgent(args)
   if (command === "status") return showStatus()
+  if (command === "attach") return attachAll(args)
 
-  console.error("Usage: agent-lifecycle <check|respawn|compact|status>")
+  console.error("Usage: agent-lifecycle <check|respawn|compact|status|attach>")
   console.error("  check     — check health of all registered agents")
   console.error("  respawn   — respawn dormant persistent agents")
   console.error("  compact   — tell an agent to compact its context")
   console.error("  status    — show detailed agent status")
+  console.error("  attach    — create tmux windows for all active agents")
   process.exit(1)
 }
 

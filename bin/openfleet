@@ -115,7 +115,10 @@ HELP
 }
 
 function run(script, args = []) {
-  const scriptPath = path.join(binDir, script)
+  let scriptPath = path.join(binDir, script)
+  if (!require('fs').existsSync(scriptPath)) {
+    scriptPath = path.join(binDir, '..', 'internal', script)
+  }
   try {
     execFileSync("node", [scriptPath, ...args], { stdio: "inherit" })
   } catch (e) {
