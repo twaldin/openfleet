@@ -105,6 +105,30 @@ function findChannelById(layout, channelId) {
   return null
 }
 
+function fetchMessages(token, channelId, { after = null, limit = 50 } = {}) {
+  if (!token) throw new Error('fetchMessages requires a bot token')
+  if (!channelId) throw new Error('fetchMessages requires a channelId')
+
+  const params = [`limit=${Math.min(limit, 100)}`]
+  if (after) params.push(`after=${after}`)
+  const query = params.length ? `?${params.join('&')}` : ''
+
+  const raw = execFileSync('curl', [
+    '-sS',
+    '-H', `Authorization: Bot ${token}`,
+    '-H', 'User-Agent: openfleet-local',
+    `https://discord.com/api/v10/channels/${channelId}/messages${query}`,
+  ], { stdio: 'pipe', encoding: 'utf8' })
+
+  const messages = JSON.parse(raw)
+  if (!Array.isArray(messages)) {
+    throw new Error(`Discord API error: ${JSON.stringify(messages)}`)
+  }
+
+  // Discord returns newest-first; reverse to chronological order
+  return messages.reverse()
+}
+
 function postDirectDiscord(token, channel, message) {
   const payload = JSON.stringify({ content: message })
   execFileSync('curl', [
@@ -119,6 +143,8 @@ function postDirectDiscord(token, channel, message) {
 }
 
 module.exports = {
+  fetchMessages,
+  loadDiscordConfig,
   postDiscord,
   resolveDiscordChannel,
   resolveInboundDiscordMessage,

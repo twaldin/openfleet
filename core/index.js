@@ -22,6 +22,7 @@ module.exports = {
   mcp: require("./mcp"),
   remote: require("./remote"),
   routing: require("./routing"),
+  instructions: require("./instructions"),
   envelope: require("./envelope"),
   playbooks: require("./playbooks"),
   stalled: require("./stalled"),

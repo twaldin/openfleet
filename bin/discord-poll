@@ -1,0 +1,161 @@
+#!/usr/bin/env node
+// Discord inbound message poller — fetches new messages and routes to agents
+const fs = require("fs")
+const path = require("path")
+const os = require("os")
+const { execFileSync } = require("child_process")
+const { parseArgs, readJson, writeJson } = require("../lib/opencode")
+const { fetchMessages, loadDiscordConfig, resolveInboundDiscordMessage } = require("../core/remote/discord")
+const { loadDeploymentConfig } = require("../core/deployment")
+const { createEventStore } = require("../core/runtime/events")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const deploymentPath = args.deployment || process.env.OPENFLEET_DEPLOYMENT
+  const once = !!args.once
+  const interval = Number(args.interval) || 10
+  const configPath = args["config-path"] || path.join(stateRoot, "discord.json")
+  const cursorsPath = args["cursors-path"] || path.join(stateRoot, "discord-cursors.json")
+
+  if (!deploymentPath) {
+    console.error("Usage: discord-poll --deployment <path> [--once] [--interval <seconds>]")
+    process.exit(1)
+  }
+
+  const deployment = loadDeploymentConfig(deploymentPath)
+  const routing = deployment.routing
+
+  if (once) {
+    poll({ configPath, cursorsPath, routing, stateRoot })
+  } else {
+    poll({ configPath, cursorsPath, routing, stateRoot })
+    setInterval(() => {
+      try {
+        poll({ configPath, cursorsPath, routing, stateRoot })
+      } catch (err) {
+        console.error(`[discord-poll] error: ${err.message}`)
+      }
+    }, interval * 1000)
+  }
+}
+
+function poll({ configPath, cursorsPath, routing, stateRoot }) {
+  const config = loadDiscordConfig(configPath)
+  if (!config || !config.token) {
+    throw new Error(`No token in ${configPath}`)
+  }
+
+  const channels = config.channels || {}
+  const cursors = readJson(cursorsPath) || {}
+  const events = createEventStore(stateRoot)
+  const guildLayoutPath = config.guild_id ? path.join(path.dirname(configPath), `discord-guild-${config.guild_id}.json`) : null
+  let routed = 0
+
+  for (const [channelName, channelId] of Object.entries(channels)) {
+    const after = cursors[channelId] || null
+    let messages
+    try {
+      messages = fetchMessages(config.token, channelId, { after })
+    } catch (err) {
+      console.error(`[discord-poll] fetch failed for #${channelName}: ${err.message}`)
+      continue
+    }
+
+    if (!messages.length) continue
+
+    // Update cursor to latest message
+    cursors[channelId] = messages[messages.length - 1].id
+
+    for (const msg of messages) {
+      // Skip bot messages
+      if (msg.author.bot) continue
+
+      const content = msg.content
+      if (!content || !content.trim()) continue
+
+      let resolution
+      try {
+        resolution = resolveInboundDiscordMessage({
+          channelId,
+          routing,
+          configPath,
+          guildLayoutPath,
+        })
+      } catch (err) {
+        console.error(`[discord-poll] route failed for #${channelName}: ${err.message}`)
+        continue
+      }
+
+      const route = resolution.route
+      const author = msg.author.username || msg.author.id
+      const formatted = `[Discord #${channelName}] ${author}: ${content}`
+
+      routeMessage({ route, message: formatted, stateRoot })
+
+      events.append({
+        type: "discord.inbound",
+        agent_id: route.agent || "orchestrator",
+        severity: "info",
+        payload: {
+          channel_name: channelName,
+          channel_id: channelId,
+          message_id: msg.id,
+          author,
+          content,
+          route_mode: route.mode,
+          route_agent: route.agent,
+        },
+      })
+
+      routed++
+    }
+  }
+
+  // Persist cursors after processing all channels
+  writeJson(cursorsPath, cursors)
+
+  if (routed > 0) {
+    console.log(`[discord-poll] routed ${routed} message(s)`)
+  }
+
+  return { routed, cursors }
+}
+
+function routeMessage({ route, message, stateRoot }) {
+  const sendBin = path.resolve(__dirname, "send")
+  const agent = route.agent
+
+  if (agent) {
+    // Route to specific agent
+    try {
+      execFileSync("node", [sendBin, agent, message], {
+        stdio: "pipe",
+        encoding: "utf8",
+      })
+    } catch (err) {
+      // Agent not in registry — fall back to parent
+      console.error(`[discord-poll] send to ${agent} failed (${err.message}), falling back to parent`)
+      sendToParent(sendBin, message)
+    }
+  } else {
+    // Route to orchestrator (parent)
+    sendToParent(sendBin, message)
+  }
+}
+
+function sendToParent(sendBin, message) {
+  execFileSync("node", [sendBin, "--to-parent", "--sender", "discord", "--message", message], {
+    stdio: "pipe",
+    encoding: "utf8",
+  })
+}
+
+try {
+  main()
+} catch (err) {
+  console.error(err.message)
+  process.exit(1)
+}
+
+module.exports = { poll }

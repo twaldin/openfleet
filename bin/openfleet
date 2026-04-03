@@ -12,11 +12,15 @@ const commands = {
   dashboard: () => run("ops", ["dashboard"]),
   summary: () => run("ops", ["summary"]),
   presence: () => run("ops", ["presence"]),
+  watch: (args) => run("ops-ui", args),
+  poll: (args) => run("discord-poll", args),
 
   // Task management
   task: (args) => run("task-state", args),
   dispatch: (args) => run("dispatch", args),
   execute: (args) => run("execute", args),
+  spawn: (args) => run("spawn", args),
+  kill: (args) => killAgentWindow(args),
 
   // Job lifecycle
   "report-completion": (args) => run("report-completion", args),
@@ -39,6 +43,7 @@ const commands = {
 
   // Orchestrator
   orchestrator: (args) => run("orchestrator", args),
+  mcp: (args) => run("mcp-server", args),
 
   // Events
   events: (args) => run("ops", ["tail", ...(args || [])]),
@@ -50,28 +55,46 @@ const commands = {
 USAGE
   openfleet <command> [args...]
 
-COMMANDS
-  status            Fleet dashboard overview
-  agents            List all agents and health
-  dashboard         Full dashboard
-  summary           Compact summary
-  presence          Agent presence/activity
+STATE
+  status              Fleet dashboard overview
+  agents              List all agents and health
+  dashboard           Full dashboard
+  summary             Compact summary
+  presence            Agent presence/activity
+  watch [args]        Interactive operations dashboard
+  poll [args]         Poll Discord messages
 
-  task <subcommand> Task lifecycle (create, list, update, etc.)
-  dispatch [args]   Dispatch a job to an agent
-  complete <job-id> Report job completion
+TASKS
+  task <subcommand>   Task lifecycle (create, list, update, etc.)
+  dispatch [args]     Dispatch a job to an agent
+  execute [args]      Execute a command or workflow
+  spawn [args]        Spawn agents in any harness
+  kill <name>         Kill tmux window openfleet:<name>
 
-  send <agent> <msg>  Message an agent
-  discord <subcommand>  Discord operations (post, summary, etc.)
+JOBS
+  report-completion <job-id>  Report job completion
+  complete <job-id>           Alias for report-completion
 
-  profile <subcmd>  Runtime profile management
-  profiles          List all runtime profiles
+COMMUNICATION
+  send <agent> <msg>          Message an agent
+  message <agent> <msg>       Alias for send
+  remote [args]               Remote operations
+  discord <subcommand>        Discord operations (post, summary, etc.)
 
-  events [--since]  Tail event log
-  stalled           Check for stalled jobs
-  maintenance       Run maintenance loop
+PROFILES
+  profile <subcmd>    Runtime profile management
+  profiles            List all runtime profiles
 
-  help              Show this help
+OPERATIONS
+  maintenance [args]  Run maintenance loop
+  stalled [args]      Check for stalled jobs
+  reconcile [args]    Reconcile fleet state
+  orchestrator [args] Orchestrator controls
+  events [args]       Tail event log
+  mcp [args]          Start MCP server
+
+HELP
+  help                Show this help
 `)
   },
 }
@@ -80,6 +103,20 @@ function run(script, args = []) {
   const scriptPath = path.join(binDir, script)
   try {
     execFileSync("node", [scriptPath, ...args], { stdio: "inherit" })
+  } catch (e) {
+    process.exit(e.status || 1)
+  }
+}
+
+function killAgentWindow(args = []) {
+  const name = args[0]
+  if (!name) {
+    console.error("Usage: openfleet kill <name>")
+    process.exit(1)
+  }
+
+  try {
+    execFileSync("tmux", ["kill-window", "-t", `openfleet:${name}`], { stdio: "inherit" })
   } catch (e) {
     process.exit(e.status || 1)
   }

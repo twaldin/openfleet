@@ -42,7 +42,7 @@ function main() {
       launchCmd = `claude --dangerously-skip-permissions --model ${model}`
       break
     case "codex":
-      launchCmd = `codex -m ${model} -C ${workdir} --no-alt-screen`
+      launchCmd = `codex -m ${model} -C ${workdir} --full-auto`
       break
     case "opencode":
       // OpenCode uses its HTTP API, not tmux directly — but we still create a window for visibility
