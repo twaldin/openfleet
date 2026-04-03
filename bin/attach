@@ -1,0 +1,106 @@
+#!/usr/bin/env node
+// Attach your terminal to an agent's CLI session
+// If the agent is alive, opens the OpenCode TUI connected to their session.
+// If dormant, offers to spawn them.
+const { execFileSync, execSync } = require("child_process")
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { loadRegistry } = require("../core/runtime/registry")
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const name = args._[0]
+
+  if (!name) {
+    // List available agents
+    const reg = loadRegistry(STATE_ROOT)
+    console.log("Usage: openfleet attach <agent-name>\n")
+    console.log("Available agents:")
+    for (const s of Object.values(reg.sessions)) {
+      if (!s.name) continue
+      const alive = isAlive(s)
+      const icon = alive ? "🟢" : "⚫"
+      console.log(`  ${icon} ${s.name.padEnd(18)} ${(s.harness || "?") + "/" + (s.model || "?")}`)
+    }
+    process.exit(0)
+  }
+
+  const reg = loadRegistry(STATE_ROOT)
+  const session = Object.values(reg.sessions).find(s => s.name === name)
+
+  if (!session) {
+    console.error(`Agent '${name}' not found in registry.`)
+    console.error("Run 'openfleet attach' to see available agents.")
+    process.exit(1)
+  }
+
+  if (!session.session_id || session.session_id.startsWith("identity_")) {
+    console.log(`${name} has no active session.`)
+    console.log(`Spawn with: openfleet respawn ${name}`)
+    console.log(`Or: openfleet spawn ${name} --harness ${session.harness || "opencode"} --model ${session.model || "gpt-5.4"} --dir ${session.directory || "."}`)
+    process.exit(0)
+  }
+
+  if (!isAlive(session)) {
+    console.log(`${name} is dormant (session exists but not recently active).`)
+    console.log(`Respawn first: openfleet respawn ${name}`)
+    console.log(`Then: openfleet attach ${name}`)
+    process.exit(0)
+  }
+
+  // Agent is alive — attach based on harness
+  const harness = session.harness || "opencode"
+  const dir = session.directory || process.cwd()
+
+  if (harness === "opencode") {
+    console.log(`Attaching to ${name} (opencode session ${session.session_id.slice(0, 15)}...)`)
+    // Replace this process with opencode attached to the session
+    const oc = process.env.OPENCODE_BIN || "opencode"
+    try {
+      execFileSync(oc, ["-s", session.session_id, "--agent", name], {
+        cwd: dir,
+        stdio: "inherit",
+      })
+    } catch {}
+  } else if (harness === "claude-code" || harness === "codex") {
+    // tmux-based — switch to their window
+    const tmuxSession = session.tmux_session || "openfleet"
+    const tmuxWindow = session.tmux_window || name
+    console.log(`Switching to tmux ${tmuxSession}:${tmuxWindow}`)
+    try {
+      execFileSync("tmux", ["select-window", "-t", `${tmuxSession}:${tmuxWindow}`], { stdio: "inherit" })
+    } catch {
+      console.error(`Window ${tmuxSession}:${tmuxWindow} not found.`)
+      console.error(`Spawn first: openfleet spawn ${name} --harness ${harness}`)
+    }
+  } else {
+    console.error(`Unknown harness: ${harness}`)
+    process.exit(1)
+  }
+}
+
+function isAlive(session) {
+  // Check tmux
+  if (session.tmux_session && session.tmux_window) {
+    try {
+      const wins = execSync(`tmux list-windows -t ${session.tmux_session} -F '#{window_name}' 2>/dev/null`, { encoding: "utf8" })
+      if (wins.split("\n").includes(session.tmux_window)) return true
+    } catch {}
+  }
+  // Check freshness for opencode
+  if (session.updated_at) {
+    const age = Date.now() - new Date(session.updated_at).getTime()
+    if (age < 15 * 60 * 1000) return true
+  }
+  return false
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(e.message)
+  process.exit(1)
+}

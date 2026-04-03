@@ -20,6 +20,7 @@ const commands = {
   dispatch: (args) => run("dispatch", args),
   execute: (args) => run("execute", args),
   spawn: (args) => run("spawn", args),
+  attach: (args) => run("attach", args),
   merge: (args) => run("merge-worker", args),
   kill: (args) => killAgentWindow(args),
 

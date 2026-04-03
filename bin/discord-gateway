@@ -147,34 +147,45 @@ async function sendToChannel(channelId, text, replyTo) {
 
 // ---- Agent message delivery ------------------------------------------------
 
+function formatDiscordMessage(channelName, author, content, attachmentPaths) {
+  const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"])
+  const parts = []
+  if (content) parts.push(content)
+  if (attachmentPaths) {
+    for (const p of attachmentPaths) {
+      const ext = p.split(".").pop().toLowerCase()
+      const label = IMAGE_EXTS.has(ext) ? "Image" : "File"
+      parts.push(`[${label}: ${p}]`)
+    }
+  }
+  const body = parts.join("\n") || "(empty)"
+  const channelId = config.channels?.[channelName]
+  const replyCmd = channelId
+    ? `node ${REMOTE_BIN} discord post --channel ${channelId} --message "<your reply>"`
+    : `node ${REMOTE_BIN} discord post --channel ${channelName} --message "<your reply>"`
+  return `[Discord #${channelName}] ${author}: ${body}\n(Reply via Discord: ${replyCmd})`
+}
+
 function sendToAgent(agentName, msg) {
-  const sendText = (text) => {
-    execFile("node", [SEND_BIN, agentName, text], (err) => {
+  const channelName = channelIdToName[msg.channelId] || msg.channelId
+  const author = msg.author.username
+
+  const sendFormatted = (attachmentPaths) => {
+    const formatted = formatDiscordMessage(channelName, author, msg.content, attachmentPaths)
+    execFile("node", [SEND_BIN, agentName, formatted], (err) => {
       if (err) {
-        // Fall back to parent if agent not in registry
         process.stderr.write(`openfleet-gateway: send to ${agentName} failed, routing to parent\n`)
-        execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", text], (err2) => {
+        execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", formatted], (err2) => {
           if (err2) process.stderr.write(`openfleet-gateway: send to parent also failed: ${err2.message}\n`)
         })
       }
     })
   }
 
-  // Handle attachments
   if (msg.attachments.size > 0) {
-    downloadAttachments(msg).then(paths => {
-      const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"])
-      const parts = []
-      if (msg.content) parts.push(msg.content)
-      for (const p of paths) {
-        const ext = p.split(".").pop().toLowerCase()
-        const label = IMAGE_EXTS.has(ext) ? "Image" : "File"
-        parts.push(`[${label}: ${p}]`)
-      }
-      sendText(parts.join("\n") || "(attachment)")
-    })
+    downloadAttachments(msg).then(paths => sendFormatted(paths))
   } else {
-    sendText(msg.content || "(empty message)")
+    sendFormatted(null)
   }
 }
 
