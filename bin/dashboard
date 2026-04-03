@@ -41,15 +41,32 @@ const START_TIME = Date.now()
 
 // --- Liveness check (same pattern as agent-lifecycle) ---
 
-function isAlive(session) {
-  if (session.tmux_session && session.tmux_window) {
-    try {
-      execFileSync("tmux", ["has-session", "-t", session.tmux_session], { stdio: "ignore" })
-      const wins = execFileSync("tmux", ["list-windows", "-t", session.tmux_session, "-F", "#{window_name}"], { encoding: "utf8" })
-      if (wins.split("\n").includes(session.tmux_window)) return true
-    } catch {}
+// Cache tmux window list (refreshed every 5s)
+let tmuxWindowCache = new Set()
+let tmuxCacheTime = 0
+function getLiveTmuxWindows() {
+  if (Date.now() - tmuxCacheTime < 5000) return tmuxWindowCache
+  try {
+    const out = execFileSync("tmux", ["list-windows", "-t", "openfleet", "-F", "#{window_name}"], { encoding: "utf8" })
+    tmuxWindowCache = new Set(out.trim().split("\n").filter(Boolean))
+  } catch { tmuxWindowCache = new Set() }
+  tmuxCacheTime = Date.now()
+  return tmuxWindowCache
+}
+
+function isAlive(session, name) {
+  // Check explicit tmux coords
+  if (session?.tmux_session && session?.tmux_window) {
+    const wins = getLiveTmuxWindows()
+    if (wins.has(session.tmux_window)) return true
   }
-  if (session.session_id && session.updated_at) {
+  // Fallback: check if a tmux window named after the agent exists
+  if (name) {
+    const wins = getLiveTmuxWindows()
+    if (wins.has(name)) return true
+  }
+  // Check opencode session freshness
+  if (session?.session_id && session?.updated_at) {
     const age = Date.now() - new Date(session.updated_at).getTime()
     if (age < 15 * 60 * 1000) return true
   }
@@ -71,9 +88,27 @@ function getFleetStatus() {
 
   const merged = []
 
+  // Add orchestrator
+  let orch = {}
+  try { orch = JSON.parse(readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8")) } catch {}
+  if (orch.profile_id) {
+    merged.push({
+      name: "cairn",
+      harness: orch.harness || "claude-code",
+      model: orch.model || "opus-4.6",
+      role: "orchestrator",
+      alive: isAlive({ tmux_session: orch.tmux_session, tmux_window: orch.tmux_window }, "cairn"),
+      status: "alive",
+      tmux_session: orch.tmux_session || "openfleet",
+      tmux_window: orch.tmux_window || "cairn",
+      directory: orch.workdir || null,
+      updated_at: orch.activated_at || null,
+    })
+  }
+
   for (const [name, agent] of Object.entries(agents)) {
     const session = sessionByName[name]
-    const alive = session ? isAlive(session) : false
+    const alive = session ? isAlive(session, name) : isAlive(null, name)
     const role = agent.role || session?.role || "ephemeral"
     merged.push({
       name,
@@ -91,7 +126,7 @@ function getFleetStatus() {
   }
 
   for (const [name, session] of Object.entries(sessionByName)) {
-    const alive = isAlive(session)
+    const alive = isAlive(session, name)
     merged.push({
       name,
       harness: session.harness || null,

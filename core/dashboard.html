@@ -338,6 +338,7 @@ html, body {
 .task-list, .event-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 4px 0;
 }
 
@@ -373,24 +374,25 @@ html, body {
 
 .event-item {
   display: flex;
-  gap: 10px;
-  padding: 4px 16px;
+  gap: 8px;
+  padding: 4px 12px;
   font-size: 11px;
   line-height: 1.5;
   border-bottom: 1px solid rgba(48, 54, 61, 0.3);
+  overflow: hidden;
 }
 
 .event-time {
   color: var(--text-dim);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  min-width: 50px;
+  width: 42px;
 }
 
 .event-type {
   color: var(--blue);
-  flex-shrink: 0;
-  min-width: 140px;
+  flex-shrink: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
