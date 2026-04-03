@@ -5,6 +5,8 @@ const fs = require("fs")
 const os = require("os")
 const path = require("path")
 const { parseArgs } = require("../lib/opencode")
+const { loadDeploymentConfig } = require("../core/deployment")
+const { projectInstructions } = require("../core/instructions")
 const { loadRegistry, saveRegistry, upsertSession } = require("../core/runtime/registry")
 const { createEventStore } = require("../core/runtime/events")
 
@@ -19,6 +21,7 @@ function main() {
   const bootstrap = args.bootstrap || null
   const useWorktree = args.worktree || false
   const baseBranch = args["base-branch"] || "main"
+  const deploymentPath = process.env.OPENFLEET_DEPLOYMENT || path.join(__dirname, "..", "examples", "cairn", "deployment.json")
 
   if (!name) {
     console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--worktree] [--bootstrap <prompt>]")
@@ -31,6 +34,13 @@ function main() {
     worktreeInfo = createWorktree(workdir, name, baseBranch)
     workdir = worktreeInfo.path
   }
+
+  try {
+    const deployment = loadDeploymentConfig(deploymentPath)
+    if (deployment) {
+      projectInstructions(name, name, harness, workdir, deployment)
+    }
+  } catch {}
 
   // Ensure tmux session exists
   try {
