@@ -45,6 +45,7 @@ const commands = {
   // Orchestrator
   orchestrator: (args) => run("orchestrator", args),
   mcp: (args) => run("mcp-server", args),
+  gateway: (args) => run("discord-gateway", args),
 
   // Events
   events: (args) => run("ops", ["tail", ...(args || [])]),

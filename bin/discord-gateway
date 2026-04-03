@@ -1,0 +1,624 @@
+#!/usr/bin/env node
+/**
+ * OpenFleet Discord Gateway
+ *
+ * Real-time Discord bot that bridges Discord and the agent fleet.
+ * Ported from claudecord's MCP server — same architecture, harness-agnostic.
+ *
+ * Inbound:  Discord messages → resolve channel → bin/send to agent (tmux/opencode/codex)
+ * Outbound: MCP tools (openfleet_reply, openfleet_fetch_messages) or HTTP side-channel
+ *
+ * Install on the orchestrator session. Agents use bin/remote discord post for outbound.
+ */
+const { Server } = require("@modelcontextprotocol/sdk/server/index.js")
+const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js")
+const { ListToolsRequestSchema, CallToolRequestSchema } = require("@modelcontextprotocol/sdk/types.js")
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  ChannelType,
+  EmbedBuilder,
+} = require("discord.js")
+const { execFile, execFileSync, execSync } = require("child_process")
+const { readFileSync, writeFileSync, existsSync, mkdirSync } = require("fs")
+const { createServer } = require("http")
+const os = require("os")
+const path = require("path")
+const crypto = require("crypto")
+
+// ---- Config ----------------------------------------------------------------
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const CONFIG_PATH = path.join(STATE_ROOT, "discord.json")
+const SEND_BIN = path.resolve(__dirname, "send")
+const REMOTE_BIN = path.resolve(__dirname, "remote")
+const ATTACHMENT_DIR = path.join(STATE_ROOT, "attachments")
+
+let config
+try {
+  config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"))
+} catch {
+  process.stderr.write(`openfleet-gateway: cannot read ${CONFIG_PATH}\n`)
+  process.exit(1)
+}
+
+const TOKEN = config.token
+const GUILD_ID = config.guild_id
+const HTTP_PORT = parseInt(process.env.OPENFLEET_GATEWAY_PORT || "19532", 10)
+const ALLOWED_USERS = (process.env.OPENFLEET_ALLOWED_USERS || "").split(",").filter(Boolean)
+const TMUX_SESSION = process.env.OPENFLEET_TMUX_SESSION || "openfleet"
+
+if (!TOKEN) {
+  process.stderr.write("openfleet-gateway: no token in discord.json\n")
+  process.exit(1)
+}
+
+// Reverse map: channelId → channelName
+const channelIdToName = {}
+for (const [name, id] of Object.entries(config.channels || {})) {
+  channelIdToName[id] = name
+}
+
+// Load deployment routing if available
+let deploymentRouting = {}
+const deploymentPath = process.env.OPENFLEET_DEPLOYMENT || path.join(__dirname, "..", "examples", "cairn", "deployment.json")
+try {
+  const dep = JSON.parse(readFileSync(deploymentPath, "utf8"))
+  deploymentRouting = dep.routing || {}
+} catch {}
+
+// ---- Agent routing ---------------------------------------------------------
+
+function resolveAgentForChannel(channelId) {
+  const channelName = channelIdToName[channelId]
+  if (!channelName) return null
+
+  // Check persistent_agent_channels from deployment config
+  const pac = deploymentRouting.persistent_agent_channels || {}
+  for (const [agent, binding] of Object.entries(pac)) {
+    const boundName = binding.replace("channel://", "")
+    if (boundName === channelName) return agent
+  }
+
+  return null
+}
+
+// ---- Discord client --------------------------------------------------------
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
+  ],
+  partials: [Partials.Message, Partials.Reaction],
+})
+
+const DISCORD_MAX = 2000
+
+function chunkText(text) {
+  if (text.length <= DISCORD_MAX) return [text]
+  const out = []
+  let rest = text
+  while (rest.length > DISCORD_MAX) {
+    const slice = rest.slice(0, DISCORD_MAX)
+    const cut = slice.lastIndexOf("\n")
+    const at = cut > DISCORD_MAX / 2 ? cut : DISCORD_MAX
+    out.push(rest.slice(0, at))
+    rest = rest.slice(at).replace(/^\n/, "")
+  }
+  if (rest) out.push(rest)
+  return out
+}
+
+async function sendToChannel(channelId, text, replyTo) {
+  const ch = await client.channels.fetch(channelId)
+  if (!ch || !ch.isTextBased()) throw new Error(`channel ${channelId} not text-based`)
+  const chunks = chunkText(text)
+  const ids = []
+  for (let i = 0; i < chunks.length; i++) {
+    const opts = { content: chunks[i] }
+    if (i === 0 && replyTo) {
+      opts.reply = { messageReference: replyTo, failIfNotExists: false }
+    }
+    const sent = await ch.send(opts)
+    ids.push(sent.id)
+  }
+  return ids
+}
+
+// ---- Agent message delivery ------------------------------------------------
+
+function sendToAgent(agentName, msg) {
+  const sendText = (text) => {
+    execFile("node", [SEND_BIN, agentName, text], (err) => {
+      if (err) {
+        // Fall back to parent if agent not in registry
+        process.stderr.write(`openfleet-gateway: send to ${agentName} failed, routing to parent\n`)
+        execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", text], (err2) => {
+          if (err2) process.stderr.write(`openfleet-gateway: send to parent also failed: ${err2.message}\n`)
+        })
+      }
+    })
+  }
+
+  // Handle attachments
+  if (msg.attachments.size > 0) {
+    downloadAttachments(msg).then(paths => {
+      const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"])
+      const parts = []
+      if (msg.content) parts.push(msg.content)
+      for (const p of paths) {
+        const ext = p.split(".").pop().toLowerCase()
+        const label = IMAGE_EXTS.has(ext) ? "Image" : "File"
+        parts.push(`[${label}: ${p}]`)
+      }
+      sendText(parts.join("\n") || "(attachment)")
+    })
+  } else {
+    sendText(msg.content || "(empty message)")
+  }
+}
+
+async function downloadAttachments(msg) {
+  mkdirSync(ATTACHMENT_DIR, { recursive: true })
+  const paths = []
+  for (const [, att] of msg.attachments) {
+    const ext = att.name?.split(".").pop() || "bin"
+    const filename = `${msg.id}-${att.id}.${ext}`
+    const filepath = path.join(ATTACHMENT_DIR, filename)
+    try {
+      const res = await fetch(att.url)
+      const buf = Buffer.from(await res.arrayBuffer())
+      writeFileSync(filepath, buf)
+      paths.push(filepath)
+    } catch (err) {
+      process.stderr.write(`openfleet-gateway: attachment download failed: ${err}\n`)
+    }
+  }
+  return paths
+}
+
+// ---- Permission watcher ----------------------------------------------------
+
+const POLL_INTERVAL = 3000
+const PERMISSION_TIMEOUT = 5 * 60 * 1000
+const pendingPrompts = new Map()
+const promptByMessageId = new Map()
+const resolvedHashes = new Map()
+
+const PERMISSION_PATTERNS = [
+  { re: /Do you want to allow/i, label: "tool-allow" },
+  { re: /Yes, allow once/, label: "tool-allow" },
+  { re: /Do you want to proceed/i, label: "mcp-approval" },
+  { re: /Do you want to create/i, label: "file-create" },
+  { re: /Esc to cancel/, label: "tool-allow" },
+  // Codex permission prompts
+  { re: /Do you trust the contents/i, label: "codex-trust" },
+  { re: /Would you like to run/i, label: "codex-run" },
+]
+
+function paneHash(text) {
+  return crypto.createHash("sha1").update(text.slice(-500)).digest("hex").slice(0, 12)
+}
+
+function extractPromptDetails(paneText) {
+  const toolMatch = paneText.match(/Tool:\s*(.+)/i)
+  const inlineMatch = paneText.match(/[⏺●]\s*(Write|Bash|Edit|Read|Glob|Grep)\(([^)]*)\)/i)
+  const cmdMatch = paneText.match(/Command:\s*(.+)/i)
+  const tool = toolMatch?.[1]?.trim() || inlineMatch?.[1]?.trim() || "unknown"
+  const context = cmdMatch?.[1]?.trim() || inlineMatch?.[2]?.trim() || paneText.slice(-200).replace(/\x1b\[[0-9;]*m/g, "").trim()
+  return { tool, context }
+}
+
+async function pollPermissions() {
+  const now = Date.now()
+
+  // Handle timeouts
+  for (const [name, pending] of pendingPrompts) {
+    if (now - pending.detectedAt > PERMISSION_TIMEOUT) {
+      pendingPrompts.delete(name)
+      promptByMessageId.delete(pending.messageId)
+      resolvedHashes.set(pending.paneHash, now)
+      // Auto-deny
+      try {
+        execFileSync("tmux", ["send-keys", "-t", `${TMUX_SESSION}:${name}`, "Down", "Down", "Enter"], { stdio: "ignore" })
+      } catch {}
+      try {
+        const ch = await client.channels.fetch(pending.channelId)
+        const msg = await ch.messages.fetch(pending.messageId)
+        const embed = new EmbedBuilder()
+          .setTitle(`Permission timed out — ${name}`)
+          .setColor(0x95A5A6)
+          .addFields({ name: "Tool", value: pending.tool, inline: true }, { name: "Result", value: "AUTO-DENIED (5m)", inline: true })
+        await msg.edit({ embeds: [embed] })
+      } catch {}
+    }
+  }
+
+  // Clean old resolved hashes
+  for (const [h, ts] of resolvedHashes) {
+    if (now - ts > 60000) resolvedHashes.delete(h)
+  }
+
+  // Scan tmux windows for permission prompts
+  let windows
+  try {
+    windows = execSync(`tmux list-windows -t ${TMUX_SESSION} -F '#{window_name}'`, { encoding: "utf8" })
+      .trim().split("\n").filter(Boolean)
+  } catch { return }
+
+  for (const windowName of windows) {
+    if (pendingPrompts.has(windowName)) continue
+
+    let paneText
+    try {
+      paneText = execSync(`tmux capture-pane -t ${TMUX_SESSION}:${windowName} -p -S -30`, { encoding: "utf8" })
+    } catch { continue }
+
+    const clean = paneText.replace(/\x1b\[[0-9;]*[mGKHFJABCDsuhlr]/g, "")
+    let matched = null
+    for (const { re, label } of PERMISSION_PATTERNS) {
+      if (re.test(clean)) { matched = { label }; break }
+    }
+    if (!matched) continue
+
+    const hash = paneHash(clean)
+    if (resolvedHashes.has(hash)) continue
+
+    // Find the channel for this agent
+    const agentChannelName = channelIdToName[config.channels?.[windowName]] ? windowName : null
+    const channelId = config.channels?.[windowName] || config.channels?.["fleet-status"]
+    if (!channelId) continue
+
+    const { tool, context } = extractPromptDetails(clean)
+    try {
+      const ch = await client.channels.fetch(channelId)
+      const embed = new EmbedBuilder()
+        .setTitle(`Permission required — ${windowName}`)
+        .setColor(0xFFA500)
+        .addFields(
+          { name: "Type", value: matched.label, inline: true },
+          { name: "Tool", value: tool, inline: true },
+          { name: "Context", value: context.slice(0, 1024), inline: false },
+        )
+        .setFooter({ text: "React ✅ to allow | ❌ to deny | Auto-denies in 5m" })
+        .setTimestamp()
+      const sentMsg = await ch.send({ embeds: [embed] })
+      await sentMsg.react("✅")
+      await sentMsg.react("❌")
+
+      const pending = {
+        agentName: windowName, channelId, messageId: sentMsg.id,
+        paneHash: hash, detectedAt: now, label: matched.label, tool, context,
+      }
+      pendingPrompts.set(windowName, pending)
+      promptByMessageId.set(sentMsg.id, windowName)
+      process.stderr.write(`openfleet-gateway: permission prompt posted for ${windowName}\n`)
+    } catch (err) {
+      process.stderr.write(`openfleet-gateway: failed to post permission prompt: ${err}\n`)
+    }
+  }
+}
+
+// ---- MCP server ------------------------------------------------------------
+
+const mcp = new Server(
+  { name: "openfleet-discord", version: "1.0.0" },
+  {
+    capabilities: { tools: {} },
+    instructions: [
+      "OpenFleet Discord gateway. Routes messages between Discord and your agent fleet.",
+      "",
+      "Use openfleet_reply to send messages to Discord channels.",
+      "Use openfleet_fetch_messages to read channel history.",
+      "Use openfleet_create_channel to create agent channels on spawn.",
+      "Use openfleet_archive_channel to archive channels when agents complete.",
+    ].join("\n"),
+  },
+)
+
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: "openfleet_reply",
+      description: "Send a message to a Discord channel. Auto-splits at 2000 chars.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "Discord channel ID" },
+          text: { type: "string", description: "Message text" },
+          reply_to: { type: "string", description: "Message ID to reply to (optional)" },
+        },
+        required: ["channel_id", "text"],
+      },
+    },
+    {
+      name: "openfleet_fetch_messages",
+      description: "Fetch recent messages from a Discord channel.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "Discord channel ID" },
+          limit: { type: "number", description: "Max messages (default 20, max 100)" },
+        },
+        required: ["channel_id"],
+      },
+    },
+    {
+      name: "openfleet_create_channel",
+      description: "Create a Discord channel for a spawned agent.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          agent_name: { type: "string" },
+          agent_type: { type: "string", enum: ["coder", "researcher", "evaluator", "persistent", "monitor"] },
+          task: { type: "string", description: "Task description for spawn embed" },
+          model: { type: "string", description: "Model name for embed" },
+        },
+        required: ["agent_name"],
+      },
+    },
+    {
+      name: "openfleet_archive_channel",
+      description: "Archive a Discord channel when an agent completes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          agent_name: { type: "string" },
+          pr_number: { type: "number" },
+          duration: { type: "string" },
+        },
+        required: ["channel_id", "agent_name"],
+      },
+    },
+  ],
+}))
+
+mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  const args = req.params.arguments || {}
+  try {
+    switch (req.params.name) {
+      case "openfleet_reply": {
+        const ids = await sendToChannel(args.channel_id, args.text, args.reply_to)
+        return { content: [{ type: "text", text: ids.length === 1 ? `sent (id: ${ids[0]})` : `sent ${ids.length} parts` }] }
+      }
+
+      case "openfleet_fetch_messages": {
+        const ch = await client.channels.fetch(args.channel_id)
+        const limit = Math.min(args.limit || 20, 100)
+        const msgs = await ch.messages.fetch({ limit })
+        const me = client.user?.id
+        const arr = [...msgs.values()].reverse()
+        const out = arr.length === 0
+          ? "(no messages)"
+          : arr.map(m => {
+              const who = m.author.id === me ? "me" : m.author.username
+              const atts = m.attachments.size > 0 ? ` +${m.attachments.size}att` : ""
+              return `[${m.createdAt.toISOString()}] ${who}: ${m.content.replace(/[\r\n]+/g, " ⏎ ")}  (id: ${m.id}${atts})`
+            }).join("\n")
+        return { content: [{ type: "text", text: out }] }
+      }
+
+      case "openfleet_create_channel": {
+        if (!GUILD_ID) throw new Error("No guild_id in discord.json")
+        const guild = client.guilds.cache.get(GUILD_ID)
+        if (!guild) throw new Error(`Guild ${GUILD_ID} not in cache`)
+
+        const agentName = args.agent_name
+        const agentType = args.agent_type || "coder"
+        const task = args.task || ""
+
+        const categoryNames = { coder: "Coders", researcher: "Research", evaluator: "Reviews", persistent: "Agents", monitor: "Agents" }
+        const categoryName = categoryNames[agentType] || "Agents"
+        let parentId
+        const existing = guild.channels.cache.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory)
+        if (existing) {
+          parentId = existing.id
+        } else {
+          const created = await guild.channels.create({ name: categoryName, type: ChannelType.GuildCategory })
+          parentId = created.id
+        }
+
+        const channel = await guild.channels.create({
+          name: agentName, type: ChannelType.GuildText, parent: parentId, topic: task || undefined,
+        })
+
+        const AGENT_COLORS = { coder: 0x5865F2, researcher: 0xED7D31, evaluator: 0xED4245, persistent: 0x57F287, monitor: 0x57F287 }
+        const embed = new EmbedBuilder()
+          .setTitle(`${agentName} spawned`)
+          .setColor(AGENT_COLORS[agentType] || 0x5865F2)
+          .addFields(
+            { name: "Type", value: agentType, inline: true },
+            { name: "Task", value: task || "(none)", inline: false },
+          )
+        if (args.model) embed.addFields({ name: "Model", value: args.model, inline: true })
+        embed.setTimestamp()
+
+        await channel.send({ embeds: [embed] })
+
+        // Update discord.json with new channel
+        config.channels[agentName] = channel.id
+        channelIdToName[channel.id] = agentName
+        writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2))
+
+        return { content: [{ type: "text", text: `created channel ${channel.id} (#${agentName})` }] }
+      }
+
+      case "openfleet_archive_channel": {
+        const ch = await client.channels.fetch(args.channel_id)
+        if (GUILD_ID) {
+          await ch.permissionOverwrites.edit(GUILD_ID, { SendMessages: false })
+        }
+        const embed = new EmbedBuilder()
+          .setTitle(`${args.agent_name} completed`)
+          .setColor(0x95A5A6)
+          .setDescription("Task finished. Channel archived.")
+        if (args.duration) embed.addFields({ name: "Duration", value: args.duration, inline: true })
+        if (args.pr_number) embed.addFields({ name: "PR", value: `#${args.pr_number}`, inline: true })
+        embed.setFooter({ text: "React 📦 Archive | 🗑️ Delete" })
+        const msg = await ch.send({ embeds: [embed] })
+        await msg.react("📦")
+        await msg.react("🗑️")
+
+        // Remove from discord.json channel map
+        const name = channelIdToName[args.channel_id]
+        if (name) {
+          delete config.channels[name]
+          delete channelIdToName[args.channel_id]
+          writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2))
+        }
+
+        return { content: [{ type: "text", text: `archived channel ${args.channel_id}` }] }
+      }
+
+      default:
+        return { content: [{ type: "text", text: `unknown tool: ${req.params.name}` }], isError: true }
+    }
+  } catch (err) {
+    return { content: [{ type: "text", text: `${req.params.name} failed: ${err.message}` }], isError: true }
+  }
+})
+
+// ---- HTTP side-channel for agents ------------------------------------------
+
+const httpServer = createServer(async (req, res) => {
+  const json = (status, body) => {
+    const payload = JSON.stringify(body)
+    res.writeHead(status, { "Content-Type": "application/json" })
+    res.end(payload)
+  }
+
+  if (req.method === "GET" && req.url === "/health") {
+    return json(200, { status: "ok", uptime: process.uptime() })
+  }
+
+  if (req.method === "POST" && req.url === "/reply") {
+    const chunks = []
+    req.on("data", c => chunks.push(c))
+    req.on("end", async () => {
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+        if (!body.channelId || !body.text) return json(400, { error: "channelId and text required" })
+        await sendToChannel(body.channelId, body.text, body.replyTo)
+        json(200, { ok: true })
+      } catch (err) {
+        json(500, { error: err.message })
+      }
+    })
+    return
+  }
+
+  json(404, { error: "not found" })
+})
+
+// ---- Inbound message handling ----------------------------------------------
+
+client.on("messageCreate", (msg) => {
+  if (msg.author.bot) return
+  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(msg.author.id)) return
+
+  const channelId = msg.channelId
+  const channelName = channelIdToName[channelId]
+  const agentName = resolveAgentForChannel(channelId)
+
+  process.stderr.write(`openfleet-gateway: message in #${channelName || channelId} → ${agentName || "parent"}\n`)
+
+  if (agentName) {
+    sendToAgent(agentName, msg)
+  } else {
+    // Route to orchestrator/parent
+    const text = msg.content || "(empty)"
+    const author = msg.author.username
+    const formatted = `[Discord #${channelName || channelId}] ${author}: ${text}`
+    execFile("node", [SEND_BIN, "--to-parent", "--sender", "discord", "--message", formatted], (err) => {
+      if (err) process.stderr.write(`openfleet-gateway: send to parent failed: ${err.message}\n`)
+    })
+  }
+})
+
+client.on("error", (err) => {
+  process.stderr.write(`openfleet-gateway: discord error: ${err}\n`)
+})
+
+// ---- Reaction handler for permissions --------------------------------------
+
+client.on("messageReactionAdd", async (reaction, user) => {
+  if (reaction.partial) { try { await reaction.fetch() } catch { return } }
+  if (user.bot) return
+  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(user.id)) return
+
+  const agentName = promptByMessageId.get(reaction.message.id)
+  if (!agentName) return
+  const pending = pendingPrompts.get(agentName)
+  if (!pending) return
+
+  const emoji = reaction.emoji.name
+  const decision = emoji === "✅" ? "allow" : emoji === "❌" ? "deny" : null
+  if (!decision) return
+
+  pendingPrompts.delete(agentName)
+  promptByMessageId.delete(pending.messageId)
+  resolvedHashes.set(pending.paneHash, Date.now())
+
+  if (decision === "allow") {
+    try { execFileSync("tmux", ["send-keys", "-t", `${TMUX_SESSION}:${agentName}`, "Enter"], { stdio: "ignore" }) } catch {}
+  } else {
+    try { execFileSync("tmux", ["send-keys", "-t", `${TMUX_SESSION}:${agentName}`, "Down", "Down", "Enter"], { stdio: "ignore" }) } catch {}
+  }
+
+  try {
+    const ch = await client.channels.fetch(pending.channelId)
+    const sentMsg = await ch.messages.fetch(pending.messageId)
+    const embed = new EmbedBuilder()
+      .setTitle(`Permission ${decision === "allow" ? "allowed" : "denied"} — ${agentName}`)
+      .setColor(decision === "allow" ? 0x57F287 : 0xED4245)
+      .addFields({ name: "Tool", value: pending.tool, inline: true }, { name: "Decision", value: decision.toUpperCase(), inline: true })
+      .setTimestamp()
+    await sentMsg.edit({ embeds: [embed] })
+  } catch {}
+})
+
+// ---- Startup ---------------------------------------------------------------
+
+async function start() {
+  await mcp.connect(new StdioServerTransport())
+  process.stderr.write("openfleet-gateway: MCP server connected\n")
+
+  httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
+    process.stderr.write(`openfleet-gateway: HTTP side-channel on 127.0.0.1:${HTTP_PORT}\n`)
+  })
+
+  client.once("ready", (c) => {
+    process.stderr.write(`openfleet-gateway: Discord connected as ${c.user.tag}\n`)
+    setInterval(() => { pollPermissions().catch(() => {}) }, POLL_INTERVAL)
+    process.stderr.write("openfleet-gateway: permission watcher started (3s)\n")
+  })
+
+  await client.login(TOKEN)
+}
+
+// ---- Graceful shutdown -----------------------------------------------------
+
+let shuttingDown = false
+function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  process.stderr.write("openfleet-gateway: shutting down\n")
+  httpServer.close()
+  setTimeout(() => process.exit(0), 2000)
+  client.destroy().finally(() => process.exit(0))
+}
+
+process.stdin.on("end", shutdown)
+process.stdin.on("close", shutdown)
+process.on("SIGTERM", shutdown)
+process.on("SIGINT", shutdown)
+
+start().catch((err) => {
+  process.stderr.write(`openfleet-gateway: startup failed: ${err}\n`)
+  process.exit(1)
+})
