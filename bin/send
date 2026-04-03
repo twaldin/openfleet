@@ -115,17 +115,27 @@ function findAgentSession(registry, name) {
 }
 
 function sendViaTmux(session, window, message) {
+  const target = `${session}:${window}`
   // Use load-buffer for long messages to avoid shell escaping issues
   if (message.length > 500) {
     const tmp = path.join(os.tmpdir(), `openfleet-send-${Date.now()}.txt`)
     fs.writeFileSync(tmp, message)
     execFileSync("tmux", ["load-buffer", tmp], { stdio: "ignore" })
-    execFileSync("tmux", ["paste-buffer", "-t", `${session}:${window}`], { stdio: "ignore" })
+    execFileSync("tmux", ["paste-buffer", "-t", target], { stdio: "ignore" })
     fs.unlinkSync(tmp)
   } else {
-    execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "-l", message], { stdio: "ignore" })
+    execFileSync("tmux", ["send-keys", "-t", target, "-l", message], { stdio: "ignore" })
   }
-  execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "Enter"], { stdio: "ignore" })
+  // Small delay then Enter — Codex TUI sometimes needs a moment after paste
+  sleep(300)
+  execFileSync("tmux", ["send-keys", "-t", target, "Enter"], { stdio: "ignore" })
+  // Second Enter after delay — catches Codex/Claude prompts that need confirmation
+  sleep(200)
+  execFileSync("tmux", ["send-keys", "-t", target, "Enter"], { stdio: "ignore" })
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 function sendViaOpencode(session, message, stateRoot) {
