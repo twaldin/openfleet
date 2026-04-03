@@ -10,7 +10,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2))
   const name = args._[0]
   const message = args._.slice(1).join(" ").trim()
-  const workspaceRoot = args["workspace-root"] || process.env.OPENFLEET_WORKSPACE_ROOT || path.join(os.homedir(), "cairn")
+  const workspaceRoot = args["workspace-root"] || process.env.OPENFLEET_WORKSPACE_ROOT || os.homedir()
   const stateDir = args["state-dir"] || process.env.OPENFLEET_STATE_DIR || path.join(os.homedir(), ".openfleet", "system", "opencode", "workers")
   const canonicalStateDir = args["canonical-state-dir"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || null
   const workerSessionScript = args["worker-session-script"] || process.env.OPENFLEET_WORKER_SESSION_SCRIPT

@@ -4,7 +4,7 @@ const path = require("path")
 const { envelopeSystemMessage } = require('../envelope')
 
 function resolveHelperDir() {
-  return process.env.OPENFLEET_HELPER_DIR || path.join(os.homedir(), ".cairn", "system", "bin")
+  return process.env.OPENFLEET_HELPER_DIR || path.join(os.homedir(), ".openfleet", "bin")
 }
 
 function executeOpencodeJob({ job, profile, prompt, stateRoot, exec = execFileSync }) {

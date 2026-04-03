@@ -6,7 +6,7 @@ const { parseArgs, ensureOpencodeServer, loadCachedSessionId, request } = requir
 const { loadSessionMetadata, saveSessionMetadata } = require("../core/runtime/session")
 const { createEventStore } = require("../core/runtime/events")
 
-const defaultWorkspaceRoot = path.join(os.homedir(), "cairn")
+const defaultWorkspaceRoot = os.homedir()
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))

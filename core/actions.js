@@ -21,7 +21,7 @@ function runAction(action, context = {}) {
 
   switch (action.type) {
     case "parent_message": {
-      const script = action.script || process.env.OPENFLEET_MESSAGE_PARENT_SCRIPT || path.join(os.homedir(), ".cairn", "system", "bin", "message_parent")
+      const script = action.script || process.env.OPENFLEET_MESSAGE_PARENT_SCRIPT || path.resolve(__dirname, '../bin/message_parent')
       const sender = action.sender || context.source || "system"
       const message = interpolate(action.message || "", context)
       exec(script, ["--sender", sender, message], { stdio: "pipe", encoding: "utf8" })
@@ -53,7 +53,7 @@ function runAction(action, context = {}) {
       return result
     }
     case "github_issue_upsert": {
-      const script = action.script || process.env.OPENFLEET_MONITOR_ISSUE_SCRIPT || path.join(os.homedir(), ".cairn", "system", "bin", "monitor_issue_upsert")
+      const script = action.script || process.env.OPENFLEET_MONITOR_ISSUE_SCRIPT || "monitor_issue_upsert"
       const payloadFile = action.payloadFile || context.payloadFile
       if (!payloadFile) throw new Error("github_issue_upsert requires payloadFile")
       const output = exec(script, [payloadFile], { stdio: "pipe", encoding: "utf8" }).trim()

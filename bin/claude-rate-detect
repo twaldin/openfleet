@@ -10,7 +10,7 @@ const { upsertProfile } = require("../core/runtime/profiles")
 function main() {
   const args = parseArgs(process.argv.slice(2))
   const session = args.session || "claudecord"
-  const window = args.window || "cairn"
+  const window = args.window || "orchestrator"
   const profileId = args.profile || "claude-opus-orchestrator"
   const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const pane = `${session}:${window}`

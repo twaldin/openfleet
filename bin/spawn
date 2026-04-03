@@ -15,13 +15,13 @@ function main() {
   const name = args._[0]
   const harness = args.harness || "claude-code"
   const model = args.model || "opus-4.6"
-  let workdir = args.dir || path.join(os.homedir(), "cairn")
+  let workdir = args.dir || process.env.OPENFLEET_WORKSPACE_ROOT || os.homedir()
   const tmuxSession = args["tmux-session"] || "openfleet"
   const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const bootstrap = args.bootstrap || null
   const useWorktree = args.worktree || false
   const baseBranch = args["base-branch"] || "main"
-  const deploymentPath = process.env.OPENFLEET_DEPLOYMENT || path.join(__dirname, "..", "examples", "cairn", "deployment.json")
+  const deploymentPath = process.env.OPENFLEET_DEPLOYMENT || null
 
   if (!name) {
     console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--worktree] [--bootstrap <prompt>]")
@@ -35,12 +35,14 @@ function main() {
     workdir = worktreeInfo.path
   }
 
-  try {
-    const deployment = loadDeploymentConfig(deploymentPath)
-    if (deployment) {
-      projectInstructions(name, name, harness, workdir, deployment)
-    }
-  } catch {}
+  if (deploymentPath) {
+    try {
+      const deployment = loadDeploymentConfig(deploymentPath)
+      if (deployment) {
+        projectInstructions(name, name, harness, workdir, deployment)
+      }
+    } catch {}
+  }
 
   // Ensure tmux session exists
   try {

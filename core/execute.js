@@ -74,7 +74,7 @@ function executeJob(stateRoot, jobId) {
 }
 
 function executeControllerJob({ job, controller, args = [], controllerDir }) {
-  const dir = controllerDir || process.env.OPENFLEET_CONTROLLER_DIR || path.join(os.homedir(), ".cairn", "system", "bin")
+  const dir = controllerDir || process.env.OPENFLEET_CONTROLLER_DIR || path.join(os.homedir(), ".openfleet", "bin")
   const controllerPath = path.join(dir, controller)
   execFileSync(controllerPath, args, { encoding: "utf8" })
   return {

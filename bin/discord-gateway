@@ -62,7 +62,7 @@ for (const [name, id] of Object.entries(config.channels || {})) {
 
 // Load deployment routing if available
 let deploymentRouting = {}
-const deploymentPath = process.env.OPENFLEET_DEPLOYMENT || path.join(__dirname, "..", "examples", "cairn", "deployment.json")
+const deploymentPath = process.env.OPENFLEET_DEPLOYMENT
 try {
   const dep = JSON.parse(readFileSync(deploymentPath, "utf8"))
   deploymentRouting = dep.routing || {}
@@ -276,7 +276,7 @@ async function pollPermissions() {
       })
   } catch { return }
 
-  // Only skip gateway's own window — all agents including cairn get permission prompts
+  // Only skip gateway's own window — all agents including orchestrator get permission prompts
   const SKIP_WINDOWS = new Set(["gateway"])
 
   for (const { index: winIndex, name: windowName } of windowEntries) {
@@ -299,7 +299,7 @@ async function pollPermissions() {
     const hash = paneHash(clean)
     if (resolvedHashes.has(hash)) continue
 
-    // Find the channel for this agent — use agent's own channel, fall back to #alerts (never #cairn or #fleet-status)
+    // Find the channel for this agent — use agent's own channel, fall back to #alerts (never #orchestrator or #fleet-status)
     const channelId = agentToChannelId[windowName] || config.channels?.[windowName] || config.channels?.["alerts"]
     if (!channelId) continue
 
@@ -718,10 +718,11 @@ function buildStatusEmbed() {
     .setDescription(`Updated <t:${Math.floor(Date.now() / 1000)}:R>`)
 
   // Orchestrator
-  const orchChannel = agentChannelMention("cairn")
+  const orchName = orch.agent || "orchestrator"
+  const orchChannel = agentChannelMention(orchName)
   embed.addFields({
     name: "Orchestrator",
-    value: `🟢 **cairn**${orchChannel} — ${orch.harness || "?"}/${orch.model || "?"}`,
+    value: `🟢 **${orchName}**${orchChannel} — ${orch.harness || "?"}/${orch.model || "?"}`,
     inline: false,
   })
 

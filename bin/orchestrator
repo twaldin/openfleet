@@ -14,12 +14,12 @@ function main() {
   const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const eventStore = createEventStore(stateRoot)
 
-  if (command === "launch-codex-cairn") {
+  if (command === "launch-codex") {
     const tmuxSession = args.session || "openfleet"
-    const tmuxWindow = args.window || "cairn-codex"
-    const workdir = args.dir || path.join(os.homedir(), "cairn")
+    const tmuxWindow = args.window || "orchestrator-codex"
+    const workdir = args.dir || process.env.OPENFLEET_WORKSPACE_ROOT || os.homedir()
     const model = args.model || "gpt-5.4"
-    const promptFile = args.prompt || path.join(os.homedir(), "cairn", "CODEX_CAIRN_BOOTSTRAP.md")
+    const promptFile = args.prompt || path.join(workdir, "CODEX_BOOTSTRAP.md")
     const profileId = args.profile || "codex-gpt54-orchestrator"
 
     ensureTmuxSession(tmuxSession)
@@ -50,7 +50,7 @@ function main() {
       activated_at: new Date().toISOString(),
     }
     saveActiveOrchestrator(stateRoot, active)
-    eventStore.append({ type: "orchestrator.activated", agent_id: "cairn", payload: active })
+    eventStore.append({ type: "orchestrator.activated", agent_id: "orchestrator", payload: active })
     return print({ ok: true, profile, active })
   }
 
@@ -66,7 +66,7 @@ function main() {
     sendToOrchestrator(active, message)
     eventStore.append({
       type: "orchestrator.prompted",
-      agent_id: "cairn",
+      agent_id: "orchestrator",
       payload: {
         profile_id: active.profile_id,
         tmux_session: active.tmux_session,
@@ -77,7 +77,7 @@ function main() {
     return print({ ok: true, active, message })
   }
 
-  throw new Error("Usage: orchestrator <launch-codex-cairn|show|send>")
+  throw new Error("Usage: orchestrator <launch-codex|show|send>")
 }
 
 function ensureTmuxSession(name) {

@@ -55,7 +55,7 @@ function loadDeploymentConfig(configPath) {
       logDir: resolvePath(configDir, parsed.server?.logDir || path.join(os.homedir(), ".openfleet", "system", "logs")),
     },
     parent: {
-      agent: parsed.parent?.agent || "cairn",
+      agent: parsed.parent?.agent || "orchestrator",
       sessionScript: resolvePath(configDir, parsed.parent?.sessionScript || ""),
     },
     routing: normalizeRouting(parsed.routing || {}),

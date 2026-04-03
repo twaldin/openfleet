@@ -26,7 +26,7 @@ function main() {
       task_title: candidate.title,
       source: candidate.source,
       channel_binding: candidate.channel_binding,
-      repo: candidate.source?.repo || 'twaldin/openfleet',
+      repo: candidate.source?.repo || null,
       goal: candidate.title,
     },
   })
