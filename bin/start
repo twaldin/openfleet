@@ -54,7 +54,6 @@ function main() {
   const args = process.argv.slice(2)
   const skipOrchestrator = args.includes("--no-orchestrator")
   const skipAgents = args.includes("--no-agents")
-  const dryRun = args.includes("--dry-run")
 
   log("Starting OpenFleet...")
 

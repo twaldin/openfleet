@@ -14,8 +14,9 @@ function loadRemoteConfig(stateRoot) {
   const configPath = remoteConfigPath(stateRoot)
   try {
     return JSON.parse(fs.readFileSync(configPath, "utf8"))
-  } catch {
-    return null
+  } catch (error) {
+    if (error && error.code === "ENOENT") return null
+    throw new Error(`Failed to load remote config at ${configPath}: ${error.message}`)
   }
 }
 

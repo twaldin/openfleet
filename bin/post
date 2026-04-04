@@ -29,40 +29,46 @@ function resolveAgentId() {
 function main() {
   const args = process.argv.slice(2)
   const message = args.filter(a => !a.startsWith("--")).join(" ")
-  const agentId = args.includes("--agent") ? args[args.indexOf("--agent") + 1] : resolveAgentId()
-  const channelOverride = args.includes("--channel") ? args[args.indexOf("--channel") + 1] : null
+  const agentIdx = args.indexOf("--agent")
+  const channelIdx = args.indexOf("--channel")
+  const agentId = (agentIdx !== -1 && agentIdx + 1 < args.length) ? args[agentIdx + 1] : resolveAgentId()
+  const channelOverride = (channelIdx !== -1 && channelIdx + 1 < args.length) ? args[channelIdx + 1] : null
 
   if (!message) {
     console.error("Usage: openfleet post <message> [--agent <name>] [--channel <channel>]")
     process.exit(1)
   }
 
-  // Emit event
-  const events = createEventStore(STATE_ROOT)
-  const event = events.append({
-    type: "agent.post",
-    agent_id: agentId,
-    severity: "info",
-    payload: { message, channel: channelOverride },
-  })
-
-  // Direct delivery (when bridge is not running, post synchronously)
+  // Try direct delivery first, mark event accordingly
   const config = loadRemoteConfig(STATE_ROOT)
   const provider = config?.provider
+  let directDelivered = false
+
   if (provider) {
     const routing = resolveEventRouting(config, "agent.post")
     if (routing.post) {
       try {
         const adapter = createAdapter(provider, config[provider], STATE_ROOT)
         const channel = channelOverride || routing.channel
-        const formatted = adapter.formatEvent(event)
+        const tempEvent = { type: "agent.post", agent_id: agentId, payload: { message } }
+        const formatted = adapter.formatEvent(tempEvent)
         adapter.post(channel, formatted, { agent_id: agentId })
         adapter.destroy()
+        directDelivered = true
       } catch (e) {
         console.error(`Warning: direct post failed (${e.message}), event saved for bridge pickup`)
       }
     }
   }
+
+  // Emit event (bridge skips if already delivered directly)
+  const events = createEventStore(STATE_ROOT)
+  const event = events.append({
+    type: "agent.post",
+    agent_id: agentId,
+    severity: "info",
+    payload: { message, channel: channelOverride, _direct_delivered: directDelivered || undefined },
+  })
 
   console.log(JSON.stringify({ ok: true, event_id: event.id, agent: agentId }))
 }

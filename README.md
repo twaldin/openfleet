@@ -108,8 +108,9 @@ TASKS
   complete <job-id>         Report job completion
 
 COMMUNICATION
-  discord post              Post to Discord channel
-  remote <subcommand>       Remote operations
+  post <message>            Post to your remote channel (provider-agnostic)
+  send <agent> <msg>        Message any agent (cross-harness)
+  remote <subcommand>       Provider-specific operations
 
 SCHEDULING
   cron --list         Show scheduled jobs
@@ -117,6 +118,8 @@ SCHEDULING
 
 OPERATIONS
   gateway             Start Discord gateway
+  bridge              Start remote event bridge
+  capture             Start passive agent capture daemon
   web-dashboard       Web dashboard (default :3000)
   maintenance         Run maintenance loop
   reconcile           Reconcile fleet state
@@ -132,7 +135,7 @@ OpenFleet uses a remote gateway for real-time communication between you and the 
 - **Approval flow:** Permission prompts surface as embeds with reaction-based approve/deny
 - **Read receipts:** Delivered messages get a reaction
 
-Agents communicate outbound via `openfleet remote discord post --channel <channel> --message "..."`.
+Agents communicate outbound via `openfleet post "message"` — the bridge routes it to whatever remote is configured.
 
 ## Worktree Isolation
 
@@ -182,7 +185,7 @@ core/                   Runtime modules
 
 internal/               28 internal service scripts
 lib/                    Shared utilities
-test/                   70 tests
+test/                   86 tests
 ```
 
 ## Roadmap
@@ -201,7 +204,7 @@ test/                   70 tests
 - Qwen 2.5 Coder 32B (local via Ollama)
 
 ### Planned Remote Interfaces
-- **Telegram** �� Bot API, simple polling or webhooks. Best mobile experience.
+- **Telegram** — Bot API, simple polling or webhooks. Best mobile experience.
 - **Slack** — Bolt SDK, Socket Mode. For team environments.
 - **SMS/Twilio** — Critical alert escalation.
 - **Webhooks** — ntfy.sh, Pushover for lightweight push notifications.
@@ -216,7 +219,7 @@ test/                   70 tests
 ## Development
 
 ```bash
-npm test          # 70 tests
+npm test          # 86 tests
 npm test -- --watch   # watch mode
 node bin/openfleet status   # verify fleet
 ```

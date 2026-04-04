@@ -39,10 +39,10 @@ PRODUCERS                              CONSUMER
 
 | Event | Source | Payload |
 |-------|--------|---------|
-| `agent.post` | Agent via `openfleet post` | `{ agent, message }` |
-| `agent.error` | Capture daemon | `{ agent, error, context }` |
-| `agent.blocked` | Capture daemon or agent | `{ agent, reason }` |
-| `agent.task_completed` | Capture daemon or agent | `{ agent, summary }` |
+| `agent.post` | Agent via `openfleet post` | `{ message, channel? }` |
+| `agent.error` | Capture daemon | `{ error }` |
+| `agent.blocked` | Capture daemon or agent | `{ reason }` |
+| `agent.task_completed` | Capture daemon or agent | `{ summary }` |
 | `session.spawned` | Fleet lifecycle (existing) | `{ agent, harness, model }` |
 | `session.died` | Fleet lifecycle | `{ agent, reason }` |
 | `agent.respawned` | Fleet lifecycle (existing) | `{ agent }` |

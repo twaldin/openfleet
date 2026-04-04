@@ -48,13 +48,10 @@ function diffLines(previous, current) {
 
 function matchPatterns(newLines) {
   const matches = []
-  const text = newLines.join("\n")
 
   for (const { pattern, type, field } of PATTERNS) {
-    const match = text.match(pattern)
-    if (match) {
-      // Grab context: the matching line + 1 line before/after
-      const lineIdx = newLines.findIndex(l => pattern.test(l))
+    const lineIdx = newLines.findIndex(l => pattern.test(l))
+    if (lineIdx !== -1) {
       const context = newLines.slice(Math.max(0, lineIdx - 1), lineIdx + 2).join("\n")
       matches.push({ type, payload: { [field]: context } })
     }

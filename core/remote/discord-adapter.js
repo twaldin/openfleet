@@ -17,6 +17,7 @@ function resolveChannel(channel, agentId) {
     if (agent?.channel) {
       return agent.channel
     }
+    console.warn(`[discord-adapter] Agent "${agentId}" has no channel configured, falling back to default routing`)
   }
   // channel is a logical name like "alerts" or "fleet-status" — prefix with channel://
   if (channel && !channel.startsWith("channel://") && !/^\d+$/.test(channel)) {
