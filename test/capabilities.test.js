@@ -102,6 +102,67 @@ test("projectInstructions warns and skips capabilities without a harness project
   assert.match(warnings[0], /codex/)
 })
 
+test("projectInstructions warns and skips missing capability references", () => {
+  const deployment = loadExampleDeployment()
+  const stateRoot = tempDir("openfleet-capabilities-state-")
+  const workdir = tempDir("openfleet-capabilities-workdir-")
+
+  writeAgents(stateRoot, {
+    reviewer: {
+      name: "reviewer",
+      role: "coder",
+      capabilities: ["missing-capability", "code-review-skill"],
+    },
+  })
+
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (message) => warnings.push(message)
+
+  try {
+    projectInstructions("reviewer", "coder", "opencode", workdir, deployment, { stateRoot })
+  } finally {
+    console.warn = originalWarn
+  }
+
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /missing-capability/)
+  assert.match(fs.readFileSync(path.join(workdir, ".opencode", "skills", "code-review.md"), "utf8"), /Code Review Skill/)
+})
+
+test("projectInstructions warns and skips capability projections for unknown harnesses", () => {
+  const deployment = loadExampleDeployment()
+  const stateRoot = tempDir("openfleet-capabilities-state-")
+  const workdir = tempDir("openfleet-capabilities-workdir-")
+
+  writeAgents(stateRoot, {
+    reviewer: {
+      name: "reviewer",
+      role: "coder",
+      capabilities: ["code-review-skill", "filesystem-mcp"],
+    },
+  })
+
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (message) => warnings.push(message)
+
+  try {
+    const targetPath = projectInstructions("reviewer", "coder", "aider", workdir, deployment, { stateRoot })
+    assert.equal(targetPath, path.join(workdir, ".openfleet", "instructions", "aider", "reviewer.md"))
+  } finally {
+    console.warn = originalWarn
+  }
+
+  assert.equal(warnings.length, 2)
+  assert.match(warnings[0], /code-review-skill/)
+  assert.match(warnings[0], /aider/)
+  assert.match(warnings[1], /filesystem-mcp/)
+  assert.match(warnings[1], /aider/)
+  assert.equal(fs.existsSync(path.join(workdir, ".opencode", "skills", "code-review.md")), false)
+  assert.equal(fs.existsSync(path.join(workdir, ".opencode", "mcp", "filesystem.json")), false)
+})
+
 test("loadCapability throws for a missing capability name", () => {
   assert.throws(() => loadCapability("missing-capability"), /Capability not found/)
 })

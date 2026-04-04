@@ -1,7 +1,7 @@
 const fs = require("fs")
 const path = require("path")
 const os = require("os")
-const { loadCapabilities, writeCapabilityProjection } = require("./capabilities")
+const { loadCapability, writeCapabilityProjection } = require("./capabilities")
 const { getPlaybook } = require("./playbooks")
 const { resolveChannelBinding } = require("./routing")
 const { getAgent } = require("./runtime/agents")
@@ -163,10 +163,21 @@ function projectAgentCapabilities(agent, harness, workdir, options = {}) {
   const capabilityNames = getAgentCapabilityNames(agent, options)
   if (capabilityNames.length === 0) return []
 
-  const capabilities = loadCapabilities(capabilityNames, options)
   const writtenPaths = []
 
-  for (const capability of capabilities) {
+  for (const capabilityName of capabilityNames) {
+    let capability
+    try {
+      capability = loadCapability(capabilityName, options)
+    } catch (error) {
+      if (error && /Capability not found:/.test(error.message)) {
+        console.warn(`Skipping capability ${capabilityName} for agent ${agent}: capability is not defined in the library`)
+        continue
+      }
+
+      throw error
+    }
+
     const targetPath = writeCapabilityProjection(capability, harness, workdir)
     if (!targetPath) {
       console.warn(`Skipping capability ${capability.name} for harness ${harness}: projection is not defined`)
