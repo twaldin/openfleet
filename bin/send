@@ -49,15 +49,15 @@ function main() {
   const tmuxSession = session.tmux_session
   const tmuxWindow = session.tmux_window
 
-  // Prefer tmux if the agent has a live window (works for all harnesses including OpenCode TUI)
-  if (tmuxSession && tmuxWindow && hasTmuxWindow(tmuxSession, tmuxWindow)) {
-    sendViaTmux(tmuxSession, tmuxWindow, message)
-    console.log(`Sent to ${target} via tmux @ ${tmuxSession}:${tmuxWindow}`)
-  } else if (harness === "opencode") {
-    // Fallback: opencode run --continue (finds latest session in agent's directory)
-    const dir = session.directory || session.workspace || path.join(stateRoot, "agents", target)
+  if (harness === "opencode") {
+    // OpenCode: always use opencode run --continue (tmux send-keys doesn't work with the TUI)
+    const dir = (session.directory || session.workspace || path.join(stateRoot, "agents", target)).replace(/^~/, os.homedir())
     sendViaOpencodeRun(dir, message)
     console.log(`Sent to ${target} via opencode run --continue --dir ${dir}`)
+  } else if (tmuxSession && tmuxWindow && hasTmuxWindow(tmuxSession, tmuxWindow)) {
+    // Claude Code / Codex: use tmux send-keys
+    sendViaTmux(tmuxSession, tmuxWindow, message)
+    console.log(`Sent to ${target} via tmux @ ${tmuxSession}:${tmuxWindow}`)
   } else {
     console.error(`Cannot route message to ${target}: no tmux coords or opencode session`)
     process.exit(1)
