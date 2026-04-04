@@ -1,8 +1,10 @@
 const fs = require("fs")
 const path = require("path")
 const os = require("os")
+const { loadCapabilities, writeCapabilityProjection } = require("./capabilities")
 const { getPlaybook } = require("./playbooks")
 const { resolveChannelBinding } = require("./routing")
+const { getAgent } = require("./runtime/agents")
 
 const OPENFLEET_SECTION_START = "<!-- OPENFLEET:START -->"
 const OPENFLEET_SECTION_END = "<!-- OPENFLEET:END -->"
@@ -108,33 +110,16 @@ function buildOpenFleetCommands(agent, role, deployment, rootDir) {
  * For persistent agents: reads SOUL.md + AGENTS.md + MEMORY.md from workspace
  * For ephemeral agents: just AGENTS.md + openfleet commands
  */
-function projectInstructions(agent, role, harness, workdir, deployment, options) {
+function projectInstructions(agent, role, harness, workdir, deployment, options = {}) {
   if (!harness) throw new Error("harness is required")
   if (!workdir) throw new Error("workdir is required")
 
   const instructions = buildAgentInstructions(agent, role, deployment, options)
   const resolvedWorkdir = path.resolve(workdir)
+  const targetPath = projectBaseInstructions(agent, harness, resolvedWorkdir, instructions)
 
-  if (harness === "opencode") {
-    const targetPath = path.join(resolvedWorkdir, ".opencode", "agents", `${agent}.md`)
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true })
-    fs.writeFileSync(targetPath, `${instructions}\n`, "utf8")
-    return targetPath
-  }
-
-  if (harness === "claude-code") {
-    const targetPath = path.join(resolvedWorkdir, "CLAUDE.md")
-    writeProjectedSection(targetPath, instructions)
-    return targetPath
-  }
-
-  if (harness === "codex") {
-    const targetPath = path.join(resolvedWorkdir, "AGENTS.md")
-    writeProjectedSection(targetPath, instructions)
-    return targetPath
-  }
-
-  throw new Error(`Unsupported harness: ${harness}`)
+  projectAgentCapabilities(agent, harness, resolvedWorkdir, options)
+  return targetPath
 }
 
 // --- Helpers ---
@@ -146,6 +131,58 @@ function readWorkspaceFile(dir, filename) {
   } catch {
     return null
   }
+}
+
+function projectBaseInstructions(agent, harness, workdir, instructions) {
+  if (harness === "opencode") {
+    const targetPath = path.join(workdir, ".opencode", "agents", `${agent}.md`)
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+    fs.writeFileSync(targetPath, `${instructions}\n`, "utf8")
+    return targetPath
+  }
+
+  if (harness === "claude-code") {
+    const targetPath = path.join(workdir, "CLAUDE.md")
+    writeProjectedSection(targetPath, instructions)
+    return targetPath
+  }
+
+  if (harness === "codex") {
+    const targetPath = path.join(workdir, "AGENTS.md")
+    writeProjectedSection(targetPath, instructions)
+    return targetPath
+  }
+
+  const targetPath = path.join(workdir, ".openfleet", "instructions", harness, `${agent}.md`)
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+  fs.writeFileSync(targetPath, `${instructions}\n`, "utf8")
+  return targetPath
+}
+
+function projectAgentCapabilities(agent, harness, workdir, options = {}) {
+  const capabilityNames = getAgentCapabilityNames(agent, options)
+  if (capabilityNames.length === 0) return []
+
+  const capabilities = loadCapabilities(capabilityNames, options)
+  const writtenPaths = []
+
+  for (const capability of capabilities) {
+    const targetPath = writeCapabilityProjection(capability, harness, workdir)
+    if (!targetPath) {
+      console.warn(`Skipping capability ${capability.name} for harness ${harness}: projection is not defined`)
+      continue
+    }
+
+    writtenPaths.push(targetPath)
+  }
+
+  return writtenPaths
+}
+
+function getAgentCapabilityNames(agent, options = {}) {
+  const stateRoot = options.stateRoot || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const agentRecord = getAgent(stateRoot, agent)
+  return Array.isArray(agentRecord?.capabilities) ? agentRecord.capabilities : []
 }
 
 function writeProjectedSection(targetPath, instructions) {
@@ -193,6 +230,8 @@ function escapeRegex(value) {
 module.exports = {
   buildAgentInstructions,
   buildOpenFleetCommands,
+  getAgentCapabilityNames,
   projectInstructions,
+  projectAgentCapabilities,
   readWorkspaceFile,
 }
