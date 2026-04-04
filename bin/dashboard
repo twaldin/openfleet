@@ -75,9 +75,23 @@ function isAlive(session, name) {
   return false
 }
 
+function agentSortRank(agent) {
+  if (agent.role === "orchestrator") return 0
+  if (agent.alive && agent.role === "persistent") return 1
+  if (agent.alive) return 2
+  if (agent.role === "persistent") return 3
+  return 4
+}
+
+function compareAgents(a, b) {
+  const rankDiff = agentSortRank(a) - agentSortRank(b)
+  if (rankDiff !== 0) return rankDiff
+  return a.name.localeCompare(b.name)
+}
+
 // --- API handlers ---
 
-function getFleetStatus() {
+function buildFleetAgents() {
   const agents = loadAgents(STATE_ROOT)
   const reg = loadRegistry(STATE_ROOT)
 
@@ -92,15 +106,16 @@ function getFleetStatus() {
 
   // Add orchestrator
   let orch = {}
-  try { orch = JSON.parse(readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8")) } catch {}
+  try { orch = JSON.parse(fs.readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8")) } catch {}
   if (orch.profile_id) {
+    const alive = isAlive({ tmux_session: orch.tmux_session, tmux_window: orch.tmux_window }, "cairn")
     merged.push({
       name: "cairn",
       harness: orch.harness || "claude-code",
       model: orch.model || "opus-4.6",
       role: "orchestrator",
-      alive: isAlive({ tmux_session: orch.tmux_session, tmux_window: orch.tmux_window }, "cairn"),
-      status: "alive",
+      alive,
+      status: alive ? "alive" : "dead",
       tmux_session: orch.tmux_session || "openfleet",
       tmux_window: orch.tmux_window || "cairn",
       directory: orch.workdir || null,
@@ -144,11 +159,23 @@ function getFleetStatus() {
     })
   }
 
+  return merged.sort(compareAgents)
+}
+
+function getAgentsData() {
+  const agents = buildFleetAgents()
+
+  return {
+    agent_count: agents.length,
+    alive_count: agents.filter((agent) => agent.alive).length,
+    agents,
+  }
+}
+
+function getFleetStatus() {
   return {
     uptime_ms: Date.now() - START_TIME,
-    agent_count: merged.length,
-    alive_count: merged.filter(a => a.alive).length,
-    agents: merged.sort((a, b) => a.name.localeCompare(b.name)),
+    ...getAgentsData(),
   }
 }
 
@@ -203,7 +230,7 @@ function resolveAgentTmux(agentName) {
     }
   }
   try {
-    const orch = JSON.parse(readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8"))
+    const orch = JSON.parse(fs.readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8"))
     if (agentName === "cairn") return { session: orch.tmux_session || "openfleet", window: orch.tmux_window || "cairn" }
   } catch {}
   const wins = getLiveTmuxWindows()
@@ -391,6 +418,11 @@ const server = http.createServer(async (req, res) => {
     // API: fleet status
     if (pathname === "/api/status" && req.method === "GET") {
       return json(res, getFleetStatus())
+    }
+
+    // API: agents
+    if (pathname === "/api/agents" && req.method === "GET") {
+      return json(res, getAgentsData())
     }
 
     // API: tasks
