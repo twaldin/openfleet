@@ -1,79 +1,121 @@
 const fs = require("fs")
 const path = require("path")
+const os = require("os")
 const { getPlaybook } = require("./playbooks")
 const { resolveChannelBinding } = require("./routing")
 
 const OPENFLEET_SECTION_START = "<!-- OPENFLEET:START -->"
 const OPENFLEET_SECTION_END = "<!-- OPENFLEET:END -->"
 
-function buildAgentInstructions(agent, role, deployment) {
+/**
+ * Build the full instruction payload for an agent by reading its workspace files.
+ *
+ * Persistent/orchestrator agents (full workspace):
+ *   SOUL.md + AGENTS.md + MEMORY.md summary + openfleet commands
+ *
+ * Ephemeral agents (stripped, like OpenClaw sub-agents):
+ *   AGENTS.md + openfleet commands only
+ */
+function buildAgentInstructions(agent, role, deployment, options = {}) {
   if (!agent) throw new Error("agent is required")
-  if (!role) throw new Error("role is required")
-  if (!deployment) throw new Error("deployment is required")
 
+  const stateRoot = options.stateRoot || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const workspaceDir = path.join(stateRoot, "agents", agent)
+  const isPersistent = role === "persistent" || role === "orchestrator" || role === "monitor"
   const rootDir = path.resolve(__dirname, "..")
+
+  const sections = []
+
+  // --- SOUL.md (persistent/orchestrator only) ---
+  if (isPersistent) {
+    const soul = readWorkspaceFile(workspaceDir, "SOUL.md")
+    if (soul) sections.push(soul)
+  }
+
+  // --- AGENTS.md from workspace (if exists) ---
+  const agentsFile = readWorkspaceFile(workspaceDir, "AGENTS.md")
+  if (agentsFile) {
+    sections.push(agentsFile)
+  }
+
+  // --- MEMORY.md summary (persistent only, first 50 lines) ---
+  if (isPersistent) {
+    const memory = readWorkspaceFile(workspaceDir, "MEMORY.md")
+    if (memory) {
+      const summary = memory.split("\n").slice(0, 50).join("\n")
+      sections.push("# Current Memory\n" + summary)
+    }
+  }
+
+  // --- Today's daily log (persistent only) ---
+  if (isPersistent) {
+    const today = new Date().toISOString().slice(0, 10)
+    const dailyLog = readWorkspaceFile(path.join(workspaceDir, "memory"), `${today}.md`)
+    if (dailyLog) {
+      const recent = dailyLog.split("\n").slice(-30).join("\n")
+      sections.push("# Today's Log\n" + recent)
+    }
+  }
+
+  // --- OpenFleet commands (always injected) ---
+  sections.push(buildOpenFleetCommands(agent, role, deployment, rootDir))
+
+  // --- Role playbook (if no SOUL.md/AGENTS.md in workspace) ---
+  if (!agentsFile) {
+    const playbook = getPlaybook(role) || getPlaybook(agent)
+    if (playbook) sections.push(playbook)
+  }
+
+  return sections.join("\n\n")
+}
+
+/**
+ * Build the OpenFleet-specific command reference block.
+ */
+function buildOpenFleetCommands(agent, role, deployment, rootDir) {
   const sendBin = path.join(rootDir, "bin", "send")
   const remoteBin = path.join(rootDir, "bin", "remote")
   const reportCompletionBin = path.join(rootDir, "bin", "report-completion")
   const taskStateBin = path.join(rootDir, "bin", "task-state")
-
-  const routing = deployment.routing || {}
-  const serverArchitecture = routing.server_architecture || {}
+  const routing = deployment?.routing || {}
   const agentChannel = resolveChannelBinding(routing, { agent: role }) || resolveChannelBinding(routing, { agent }) || null
-  const parentAgent = deployment.parent?.agent || "parent"
-  const playbook = getPlaybook(role) || getPlaybook(agent)
+  const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
 
   const lines = [
-    `OPENFLEET AGENT`,
-    `- Name: ${agent}`,
-    `- Role: ${role}`,
-    `- Parent: ${parentAgent}`,
+    `# OpenFleet Commands`,
+    ``,
+    `Message parent: node ${sendBin} --to-parent --sender ${agent} --message "<update>"`,
+    `Post to Discord: node ${remoteBin} discord post --channel "${agentChannel || ""}" --message "<msg>"`,
+    ``,
+    `## Completion Protocol`,
+    `When job is done: node ${reportCompletionBin} <job-id> --summary "<summary>" --continue --execute`,
+    ``,
+    `## Blocker Protocol`,
+    `When blocked: node ${taskStateBin} blocker create --agent ${agent} --summary "<what>" --question "<need>"`,
+    ``,
+    `## Compaction Protocol`,
+    `When context is heavy or told to compact:`,
+    `1. Save state to ~/.openfleet/agents/${agent}/MEMORY.md`,
+    `2. Append today's key events to ~/.openfleet/agents/${agent}/memory/YYYY-MM-DD.md`,
+    `3. Post status to Discord channel`,
+    `4. Message parent: "Compacted. State saved."`,
+    `On restart: read SOUL.md, MEMORY.md, and today's log first.`,
   ]
-
-  if (playbook) {
-    lines.push(`- Role playbook:`)
-    lines.push(...playbook.split("\n").map((line) => `  ${line}`))
-  }
-
-  lines.push(
-    ``,
-    `CHANNELS`,
-    `- Agent channel: ${agentChannel || "none"}`,
-    `- Default human channel: ${routing.default_human_channel || "none"}`,
-    `- Status channel: ${serverArchitecture.status_channel || "none"}`,
-    `- Blocker channel: ${serverArchitecture.blocker_channel || "none"}`,
-    `- Approval channel: ${serverArchitecture.approval_channel || "none"}`,
-    ``,
-    `COMMANDS`,
-    `- Message parent: node ${sendBin} --to-parent --sender ${agent} --message "<concise update>"`,
-    `- Post to Discord: node ${remoteBin} discord post --channel "${agentChannel || routing.default_human_channel || ""}" --message "<message>"`,
-    `- Discord channels accept deployment bindings like channel://code-status or a raw Discord channel id.`,
-    ``,
-    `COMPLETION PROTOCOL`,
-    `- When the assigned job is actually complete, run: node ${reportCompletionBin} <job-id> --summary "<one concise summary>" --continue --execute`,
-    `- Do not report completion early.`,
-    ``,
-    `BLOCKER PROTOCOL`,
-    `- If missing context blocks safe progress, create a blocker instead of guessing.`,
-    `- Use: node ${taskStateBin} blocker create --job <job-id> --workflow <workflow-id> --agent ${agent} --summary "<short blocker summary>" --question "<what you need from the human>" --type human --channel "${agentChannel || routing.default_human_channel || ""}"`,
-    ``,
-    `COMPACTION PROTOCOL (persistent agents)`,
-    `- When context feels heavy, you are explicitly told to compact, or after extended work:`,
-    `  1. Write your full current state to state.md in your working directory`,
-    `     Include: what you were doing, key findings, next actions, any open questions`,
-    `  2. Post a brief status update to your Discord channel`,
-    `  3. Message parent: node ${sendBin} --to-parent --sender ${agent} --message "Compacted. State saved to state.md."`,
-    `- On restart/respawn, always read state.md and core.md first to restore context.`,
-  )
 
   return lines.join("\n")
 }
 
-function projectInstructions(agent, role, harness, workdir, deployment) {
+/**
+ * Project workspace files into the harness-specific instruction format.
+ *
+ * For persistent agents: reads SOUL.md + AGENTS.md + MEMORY.md from workspace
+ * For ephemeral agents: just AGENTS.md + openfleet commands
+ */
+function projectInstructions(agent, role, harness, workdir, deployment, options) {
   if (!harness) throw new Error("harness is required")
   if (!workdir) throw new Error("workdir is required")
 
-  const instructions = buildAgentInstructions(agent, role, deployment)
+  const instructions = buildAgentInstructions(agent, role, deployment, options)
   const resolvedWorkdir = path.resolve(workdir)
 
   if (harness === "opencode") {
@@ -96,6 +138,17 @@ function projectInstructions(agent, role, harness, workdir, deployment) {
   }
 
   throw new Error(`Unsupported harness: ${harness}`)
+}
+
+// --- Helpers ---
+
+function readWorkspaceFile(dir, filename) {
+  try {
+    const content = fs.readFileSync(path.join(dir, filename), "utf8").trim()
+    return content || null
+  } catch {
+    return null
+  }
 }
 
 function writeProjectedSection(targetPath, instructions) {
@@ -142,5 +195,7 @@ function escapeRegex(value) {
 
 module.exports = {
   buildAgentInstructions,
+  buildOpenFleetCommands,
   projectInstructions,
+  readWorkspaceFile,
 }
