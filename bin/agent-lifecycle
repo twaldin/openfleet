@@ -157,9 +157,11 @@ function showStatus() {
   // Show agents from agents.json first (canonical list)
   for (const [name, agent] of Object.entries(agents)) {
     const session = sessionByName[name]
-    const alive = session ? isAlive(session) : false
+    // For agents without a registry session, synthesize one from agents.json for liveness check
+    const effectiveSession = session || { tmux_session: "openfleet", tmux_window: name }
+    const alive = isAlive(effectiveSession)
     const role = agent.role || session?.role || "ephemeral"
-    const status = alive ? "🟢 alive" : role === "persistent" ? "⚫ dormant" : "💀 dead"
+    const status = alive ? "🟢 alive" : role === "persistent" || role === "orchestrator" ? "⚫ dormant" : "💀 dead"
     console.log(
       name.padEnd(20),
       (agent.harness || session?.harness || "?").padEnd(12),
