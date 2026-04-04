@@ -7,7 +7,7 @@ const {
   approveViaKeys,
   buildEscalationMessage,
 } = require("../core/permission-resolver")
-const { PERMISSION_PATTERNS } = require("../core/permission-patterns")
+const { DEFAULT_APPROVE_SEQUENCE, DEFAULT_DENY_SEQUENCE, PERMISSION_PATTERNS } = require("../core/permission-patterns")
 
 test("permission patterns are configurable for multiple harnesses", () => {
   const ids = PERMISSION_PATTERNS.map((pattern) => pattern.id)
@@ -16,6 +16,16 @@ test("permission patterns are configurable for multiple harnesses", () => {
   assert.ok(ids.includes("claude-code"))
   assert.ok(ids.includes("codex"))
   assert.ok(ids.includes("generic"))
+})
+
+test("permission patterns define harness-specific key sequences", () => {
+  const byId = Object.fromEntries(PERMISSION_PATTERNS.map((pattern) => [pattern.id, pattern]))
+
+  assert.deepEqual(byId.opencode.approveSequence, ["Right", "Enter", "Enter"])
+  assert.deepEqual(byId["claude-code"].approveSequence, DEFAULT_APPROVE_SEQUENCE)
+  assert.deepEqual(byId["claude-code"].denySequence, DEFAULT_DENY_SEQUENCE)
+  assert.deepEqual(byId.codex.approveSequence, ["1"])
+  assert.deepEqual(byId.codex.denySequence, ["3"])
 })
 
 test("parsePermissionPrompt detects OpenCode permission prompts and extracts the requested path", () => {
@@ -50,6 +60,20 @@ test("parsePermissionPrompt detects Claude Code prompts from the shared pattern 
   assert.equal(result.path, "~/.ssh/config")
 })
 
+test("parsePermissionPrompt detects Claude Code allow-tool prompt variants", () => {
+  const paneText = [
+    "Allow tool Read on /tmp/openfleet-task-123/cache.json?",
+    "Yes, allow once",
+    "No, deny",
+  ].join("\n")
+
+  const result = parsePermissionPrompt(paneText, { agent: "claude-coder" })
+
+  assert.equal(result.detected, true)
+  assert.equal(result.patternId, "claude-code")
+  assert.equal(result.path, "/tmp/openfleet-task-123/cache.json")
+})
+
 test("parsePermissionPrompt detects Codex prompts from the shared pattern config", () => {
   const paneText = [
     "Do you trust the contents of /private/tmp/openfleet-wt-coder-123?",
@@ -61,6 +85,23 @@ test("parsePermissionPrompt detects Codex prompts from the shared pattern config
   assert.equal(result.detected, true)
   assert.equal(result.patternId, "codex")
   assert.equal(result.path, "/private/tmp/openfleet-wt-coder-123")
+  assert.deepEqual(result.approveSequence, ["1"])
+  assert.deepEqual(result.denySequence, ["3"])
+})
+
+test("parsePermissionPrompt detects Codex trust-this-project prompt variants", () => {
+  const paneText = [
+    "Do you trust this project?",
+    "/private/tmp/openfleet-wt-coder-456",
+    "1. trust once/always",
+    "2. reject",
+  ].join("\n")
+
+  const result = parsePermissionPrompt(paneText, { agent: "codex-coder" })
+
+  assert.equal(result.detected, true)
+  assert.equal(result.patternId, "codex")
+  assert.equal(result.path, "/private/tmp/openfleet-wt-coder-456")
 })
 
 test("parsePermissionPrompt falls back to a generic permission matcher", () => {
@@ -86,6 +127,14 @@ test("evaluateSafety distinguishes safe paths from risky paths", () => {
   assert.equal(evaluateSafety("~/.ssh/config", agentWorkdir), "risky")
   assert.equal(evaluateSafety("rm -rf /tmp/openfleet-task-123", agentWorkdir), "risky")
   assert.equal(evaluateSafety("/etc/passwd", agentWorkdir), "risky")
+  assert.equal(evaluateSafety("/Users/tim/src/project/../project/src/index.js", agentWorkdir), "safe")
+})
+
+test("evaluateSafety rejects normalized traversal attempts before safe-path checks", () => {
+  const agentWorkdir = "/tmp/openfleet-wt-perm-coder-123/worktree"
+
+  assert.equal(evaluateSafety("/tmp/openfleet-wt-../../.ssh/config", agentWorkdir), "risky")
+  assert.equal(evaluateSafety('Read("/tmp/openfleet-wt-perm-coder-123/../../.openfleet/config.json")', agentWorkdir), "risky")
 })
 
 test("approveViaKeys sends the allow-always tmux key sequence", () => {
@@ -104,11 +153,40 @@ test("approveViaKeys sends the allow-always tmux key sequence", () => {
   ])
 })
 
+test("approveViaKeys sends the Codex numbered trust option", () => {
+  const calls = []
+
+  approveViaKeys("openfleet", "codex-coder", ["1"], {
+    exec(file, args, options) {
+      calls.push({ file, args, options })
+    },
+  })
+
+  assert.deepEqual(calls.map((call) => [call.file, ...call.args]), [
+    ["tmux", "send-keys", "-t", "openfleet:codex-coder", "1"],
+  ])
+})
+
 test("buildEscalationMessage formats a Discord-ready risky prompt alert", () => {
   const message = buildEscalationMessage("perm-coder", "~/.ssh/config")
 
-  assert.match(message, /Permission prompt requires review/)
-  assert.match(message, /Agent: perm-coder/)
-  assert.match(message, /Requested path: ~\/\.ssh\/config/)
-  assert.match(message, /React ✅ to approve or ❌ to deny/)
+  assert.equal(message, [
+    "Permission prompt requires review.",
+    "Agent: perm-coder",
+    "Requested path: ~/.ssh/config",
+    "React ✅ to approve or ❌ to deny.",
+  ].join("\n"))
+})
+
+test("parsePermissionPrompt returns null for an empty pane", () => {
+  assert.equal(parsePermissionPrompt("", { agent: "perm-coder" }), null)
+})
+
+test("parsePermissionPrompt ignores partial prompts without actionable options", () => {
+  const paneText = [
+    "Do you trust this project?",
+    "/private/tmp/openfleet-wt-coder-456",
+  ].join("\n")
+
+  assert.equal(parsePermissionPrompt(paneText, { agent: "codex-coder" }), null)
 })

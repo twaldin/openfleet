@@ -60,6 +60,18 @@ function expandHome(value) {
   return value
 }
 
+function normalizePathCandidate(value) {
+  const expanded = expandHome(trimPath(value))
+  if (!expanded || !path.isAbsolute(expanded)) return null
+  return path.resolve(expanded)
+}
+
+function extractNormalizedPaths(text) {
+  return [...new Set((String(text || "").match(PATH_TOKEN_RE) || [])
+    .map(normalizePathCandidate)
+    .filter(Boolean))]
+}
+
 function isWithinRoot(candidate, root) {
   if (!candidate || !root) return false
   return candidate === root || candidate.startsWith(`${root}/`)
@@ -70,19 +82,12 @@ function evaluateSafety(requestedPath, agentWorkdir) {
   if (!request) return "risky"
   if (RISKY_OP_RE.test(request)) return "risky"
 
-  const expandedRequest = expandHome(request)
-  if (/(^|\s)(~\/\.ssh|\/Users\/[^/]+\/\.ssh|\/root\/\.ssh)(\/|$)/.test(request) || /(^|\s)\/Users\/[^/]+\/\.ssh(\/|$)/.test(expandedRequest)) {
-    return "risky"
-  }
-  if (/(^|\s)(~\/\.openfleet|\/Users\/[^/]+\/\.openfleet|\/root\/\.openfleet)(\/|$)/.test(request) || /(^|\s)\/Users\/[^/]+\/\.openfleet(\/|$)/.test(expandedRequest)) {
-    return "risky"
-  }
-
-  const agentRoot = expandHome(agentWorkdir || "")
-  const candidates = (expandedRequest.match(PATH_TOKEN_RE) || []).map(trimPath)
+  const agentRoot = normalizePathCandidate(agentWorkdir || "")
+  const candidates = extractNormalizedPaths(request)
   if (candidates.length === 0) return "risky"
 
   for (const candidate of candidates) {
+    if (/\/(?:\.ssh|\.openfleet)(\/|$)/.test(candidate)) return "risky"
     if (/^\/tmp\/openfleet-[^/]+/.test(candidate)) return "safe"
     if (/\/openfleet-wt-[^/]+/.test(candidate)) return "safe"
     if (agentRoot && isWithinRoot(candidate, agentRoot)) return "safe"
