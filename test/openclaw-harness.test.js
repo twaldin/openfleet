@@ -18,7 +18,17 @@ test("buildSpawnCommand builds an OpenClaw headless launch command with model an
   assert.match(command, /openclaw/)
   assert.match(command, /--headless/)
   assert.match(command, /--port 14567/)
-  assert.match(command, /--model gpt-5\.4/)
+  assert.match(command, /--model 'gpt-5\.4'/)
+})
+
+test("buildSpawnCommand shell-quotes hostile model input", () => {
+  const hostileModel = "gpt-5.4; rm -rf / `touch /tmp/pwned`"
+  const command = buildSpawnCommand("openclaw-coder", hostileModel, 14567, "/tmp/openfleet")
+
+  assert.equal(
+    command,
+    "openclaw --headless --port 14567 --model 'gpt-5.4; rm -rf / `touch /tmp/pwned`'",
+  )
 })
 
 test("sendMessage posts to the OpenClaw gateway with bearer auth", async () => {

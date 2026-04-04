@@ -6,7 +6,7 @@ function buildSpawnCommand(name, model, port, workdir, token = null) {
   if (token) {
     parts.push(`OPENCLAW_TOKEN=${shellQuote(token)}`)
   }
-  parts.push("openclaw", "--headless", "--port", String(port), "--model", model)
+  parts.push("openclaw", "--headless", "--port", String(port), "--model", shellQuote(model))
   return parts.join(" ")
 }
 
