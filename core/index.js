@@ -19,7 +19,7 @@ module.exports = {
   remote: require("./remote"),
   routing: require("./routing"),
   instructions: require("./instructions"),
-  capabilities: require("./capabilities"),
+  skills: require("./skills"),
   envelope: require("./envelope"),
   playbooks: require("./playbooks"),
   stalled: require("./stalled"),

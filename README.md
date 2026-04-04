@@ -72,7 +72,7 @@ All state lives in `~/.openfleet/` as flat JSON files — no database, no daemon
 ### Agent Workspaces
 
 Each agent gets a workspace at `~/.openfleet/agents/<name>/` with:
-- `SOUL.md` — identity, role, capabilities
+- `SOUL.md` — identity, role, skills
 - `MEMORY.md` — durable memory across sessions
 - `HEARTBEAT.md` — periodic checklist
 - `state.md` — current operational state
