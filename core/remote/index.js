@@ -1,5 +1,5 @@
 const { postDiscord, resolveInboundDiscordMessage } = require('./discord')
-const { buildApprovalSurface, buildBlockerSurface, buildPresenceSurface, buildSummary } = require('../ops')
+const { buildPresenceSurface, buildSummary } = require('../ops')
 
 function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers = {} }) {
   if (adapter !== 'discord') {
@@ -30,30 +30,6 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
     })
   }
 
-  if (action === 'approvals') {
-    return deliver({
-      message: buildApprovalSurface(stateRoot, {
-        agent: args.agent || null,
-        channelBinding: args.channelBinding || null,
-      }),
-      channel: args.channel,
-      source,
-      stateRoot,
-    })
-  }
-
-  if (action === 'blockers') {
-    return deliver({
-      message: buildBlockerSurface(stateRoot, {
-        agent: args.agent || null,
-        channelBinding: args.channelBinding || null,
-      }),
-      channel: args.channel,
-      source,
-      stateRoot,
-    })
-  }
-
   if (action === 'presence') {
     return deliver({
       message: buildPresenceSurface(stateRoot, {
@@ -74,7 +50,7 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
     })
   }
 
-  throw new Error('Usage: remote discord <post|summary|approvals|blockers|presence|route-inbound> ...')
+  throw new Error('Usage: remote discord <post|summary|presence|route-inbound> ...')
 }
 
 module.exports = {

@@ -4,7 +4,6 @@ const path = require("path")
 const { executeRemoteAction } = require("./remote")
 const { createEventStore } = require("./runtime/events")
 const { createJob } = require("./runtime/jobs")
-const { createWorkflow } = require("./runtime/workflows")
 
 function defaultStateRoot() {
   return process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
@@ -98,23 +97,11 @@ function runAction(action, context = {}) {
       })
       return { ok: true, type: action.type, title: action.title, repo: action.repo, url: output || null }
     }
-    case "workflow_create": {
-      const workflow = createWorkflow(stateRoot, {
-        type: action.workflowType || "workflow",
-        status: action.status || "created",
-        steps: action.steps || [],
-        context: action.context || context.context || {},
-      })
-      eventStore.append({ type: "workflow.created", agent_id: action.source || context.source || "system", payload: workflow })
-      return { ok: true, type: action.type, workflow }
-    }
     case "job_create": {
-      const workflowId = action.workflowId || context.workflowId || null
       const job = createJob(stateRoot, {
         type: action.jobType || "task",
         status: action.status || "queued",
         agent: action.agent || null,
-        workflow_id: workflowId,
         trigger: action.trigger || null,
         input: action.input || context.input || null,
       })

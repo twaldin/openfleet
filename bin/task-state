@@ -5,241 +5,46 @@ const path = require("path")
 const { parseArgs } = require("../lib/opencode")
 const { createEventStore } = require("../core/runtime/events")
 const { createTask, getTask, listTasks, updateTask } = require("../core/runtime/tasks")
-const { createBlocker, getBlocker, listBlockers, updateBlocker } = require("../core/runtime/blockers")
-const { createApproval, getApproval, listApprovals, updateApproval } = require("../core/runtime/approvals")
-const { resolveApproval, resolveBlocker, resolveLatestByChannel } = require("../core/runtime/resolution")
-const { attachApprovalToTask, attachBlockerToTask } = require("../core/resolution")
-const { getWorkflow, updateWorkflow } = require("../core/runtime/workflows")
-const { createWorkflow, advanceWorkflow } = require("../core/runtime/workflows")
-const { dispatchJob } = require("../core/dispatch")
 
 function main() {
   const args = parseArgs(process.argv.slice(2))
-  const [kind, command, id] = args._
+  const offset = args._[0] === 'task' ? 1 : 0
+  const command = args._[offset]
+  const id = args._[offset + 1]
   const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const eventStore = createEventStore(stateRoot)
 
-  if (kind === "task") {
-    if (command === "create") {
-      const task = createTask(stateRoot, {
-        title: args.title,
-        source: parseJson(args.source),
-        status: args.status,
-        assignee: args.assignee,
-        workflow_id: args.workflow,
-        channel_binding: args.channel,
-      })
-      eventStore.append({ type: "task.created", agent_id: task.assignee || "openfleet", payload: task })
-      return print(task)
-    }
-    if (command === "update") {
-      const task = updateTask(stateRoot, id, {
-        status: args.status,
-        assignee: args.assignee,
-        workflow_id: args['clear-workflow'] ? null : args.workflow,
-        blocker_ids: parseJson(args.blockers) || undefined,
-        approval_ids: parseJson(args.approvals) || undefined,
-        channel_binding: args.channel || undefined,
-      })
-      eventStore.append({ type: "task.updated", agent_id: task.assignee || "openfleet", payload: task })
-      return print(task)
-    }
-    if (command === "show") return print(getTask(stateRoot, id))
-    if (command === "list") return print(listTasks(stateRoot))
-    if (command === "start-workflow") {
-      if (!id) throw new Error("Usage: task-state task start-workflow <task-id> --steps '[...]'")
-      const task = getTask(stateRoot, id)
-      if (!task) throw new Error(`Unknown task: ${id}`)
-      const steps = parseJson(args.steps) || []
-      const workflow = createWorkflow(stateRoot, {
-        type: args.type || "task-workflow",
-        status: "created",
-        steps,
-        context: {
-          task_id: task.id,
-          task_title: task.title,
-          source: task.source,
-          channel_binding: task.channel_binding,
-          ...(parseJson(args.context) || {}),
-        },
-      })
-      const updatedTask = updateTask(stateRoot, id, {
-        workflow_id: workflow.id,
-        status: args.status || "active",
-      })
-      eventStore.append({ type: "workflow.created", agent_id: updatedTask.assignee || "openfleet", payload: workflow })
-      eventStore.append({ type: "task.updated", agent_id: updatedTask.assignee || "openfleet", payload: updatedTask })
-
-      if (args.dispatch) {
-        const advanced = advanceWorkflow(stateRoot, workflow.id)
-        eventStore.append({ type: "workflow.updated", agent_id: "openfleet", payload: advanced })
-        const step = advanced.current_step
-        if (!step) return print({ task: updatedTask, workflow: advanced, next: null })
-        const [agent, action] = step.split('.', 2)
-        const preferred = task.source?.type === 'implementation_backlog' && agent === 'coder'
-          ? 'opencode-gpt54-coder'
-          : null
-        const dispatched = dispatchJob(stateRoot, {
-          type: step,
-          agent,
-          workflow_id: advanced.id,
-          trigger: 'task-start-workflow',
-          role: agent,
-          preferred_profile: preferred,
-          input: {
-            step,
-            action,
-            workflow_id: advanced.id,
-            context: advanced.context,
-          },
-        })
-        if (args.execute) {
-          const { executeJob } = require('../core/execute')
-          const executed = executeJob(stateRoot, dispatched.job.id)
-          return print({ task: updatedTask, workflow: advanced, next: executed })
-        }
-        return print({ task: updatedTask, workflow: advanced, next: dispatched })
-      }
-
-      return print({ task: updatedTask, workflow, next: null })
-    }
+  if (command === "create") {
+    const task = createTask(stateRoot, {
+      title: args.title,
+      status: args.status,
+      assignee: args.assignee,
+      blocked_on: parseOptionalField(args['blocked-on']),
+    })
+    eventStore.append({ type: "task.created", agent_id: task.assignee || "openfleet", payload: task })
+    return print(task)
   }
 
-  if (kind === "blocker") {
-    if (command === "create") {
-      const parentTask = args.task ? getTask(stateRoot, args.task) : null
-      const blocker = createBlocker(stateRoot, {
-        task_id: args.task,
-        job_id: args.job,
-        workflow_id: args.workflow,
-        agent_id: args.agent,
-        summary: args.summary,
-        question: args.question,
-        blocked_on_type: args.type,
-        blocked_on_id: args.on,
-        escalated: parseBoolean(args.escalated),
-        urgency: args.urgency,
-        channel_binding: args.channel || (parentTask?.channel_binding || null),
-      })
-      const task = attachBlockerToTask(stateRoot, blocker)
-      if (task && task.status !== "blocked") {
-        updateTask(stateRoot, task.id, { status: "blocked" })
-      }
-      if (args.job) {
-        const { updateJob } = require("../core/runtime/jobs")
-        updateJob(stateRoot, args.job, { status: "blocked" })
-      }
-      if (blocker.workflow_id) {
-        const workflow = getWorkflow(stateRoot, blocker.workflow_id)
-        if (workflow && workflow.status !== "blocked") {
-          updateWorkflow(stateRoot, blocker.workflow_id, { status: "blocked" })
-        }
-      }
-      eventStore.append({ type: "blocker.created", agent_id: blocker.agent_id || "openfleet", payload: blocker })
-      return print(blocker)
-    }
-    if (command === "update") {
-      const blocker = updateBlocker(stateRoot, id, definedFields({
-        status: args.status,
-        blocked_on_type: args.type,
-        blocked_on_id: args.on,
-        escalated: parseBoolean(args.escalated),
-      }))
-      eventStore.append({ type: "blocker.updated", agent_id: blocker.agent_id || "openfleet", payload: blocker })
-      return print(blocker)
-    }
-    if (command === "resolve") {
-      return print(resolveBlocker(stateRoot, id, {
-        status: args.status || "cleared",
-        answer: args.answer || null,
-        resolved_by: args.by || null,
-      }))
-    }
-    if (command === "show") return print(getBlocker(stateRoot, id))
-    if (command === "list") return print(listBlockers(stateRoot))
+  if (command === "update") {
+    const task = updateTask(stateRoot, id, {
+      status: args.status,
+      assignee: args.assignee,
+      blocked_on: parseOptionalField(args['blocked-on']),
+    })
+    eventStore.append({ type: "task.updated", agent_id: task.assignee || "openfleet", payload: task })
+    return print(task)
   }
 
-  if (kind === "approval") {
-    if (command === "create") {
-      const parentTask = args.task ? getTask(stateRoot, args.task) : null
-      const approval = createApproval(stateRoot, {
-        task_id: args.task,
-        job_id: args.job,
-        workflow_id: args.workflow,
-        agent_id: args.agent,
-        action_type: args.action,
-        summary: args.summary,
-        risk_class: args.risk,
-        channel_binding: args.channel || (parentTask?.channel_binding || null),
-      })
-      const task = attachApprovalToTask(stateRoot, approval)
-      if (task && task.status !== "awaiting_approval") {
-        updateTask(stateRoot, task.id, { status: "awaiting_approval" })
-      }
-      if (approval.workflow_id) {
-        const workflow = getWorkflow(stateRoot, approval.workflow_id)
-        if (workflow && workflow.status !== "awaiting_approval") {
-          updateWorkflow(stateRoot, approval.workflow_id, { status: "awaiting_approval" })
-        }
-      }
-      eventStore.append({ type: "approval.created", agent_id: approval.agent_id || "openfleet", payload: approval })
-      return print(approval)
-    }
-    if (command === "update") {
-      const approval = updateApproval(stateRoot, id, {
-        status: args.status,
-        resolved_by: args.by,
-        resolved_at: args.status && args.status !== 'pending' ? new Date().toISOString() : null,
-        resolution: args.resolution || null,
-      })
-      eventStore.append({ type: "approval.updated", agent_id: approval.agent_id || "openfleet", payload: approval })
-      return print(approval)
-    }
-    if (command === "resolve") {
-      return print(resolveApproval(stateRoot, id, {
-        status: args.status || "approved",
-        resolution: args.resolution || null,
-        resolved_by: args.by || null,
-      }))
-    }
-    if (command === "show") return print(getApproval(stateRoot, id))
-    if (command === "list") return print(listApprovals(stateRoot))
-  }
+  if (command === "show") return print(getTask(stateRoot, id))
+  if (command === "list") return print(listTasks(stateRoot))
 
-  if (kind === "context") {
-    if (command === "resolve-blocker") {
-      return print(resolveLatestByChannel(stateRoot, "blocker", args.channel, {
-        status: args.status || "cleared",
-        answer: args.answer || null,
-        resolved_by: args.by || null,
-      }))
-    }
-    if (command === "resolve-approval") {
-      return print(resolveLatestByChannel(stateRoot, "approval", args.channel, {
-        status: args.status || "approved",
-        resolution: args.resolution || null,
-        resolved_by: args.by || null,
-      }))
-    }
-  }
-
-  throw new Error("Usage: task-state <task|blocker|approval|context> ...")
+  throw new Error("Usage: task-state task <create|list|update|show> ...")
 }
 
-function parseJson(value) {
-  if (!value) return null
-  return JSON.parse(value)
-}
-
-function parseBoolean(value) {
-  if (value == null) return undefined
-  if (value === true || value === "true") return true
-  if (value === false || value === "false") return false
-  throw new Error(`Invalid boolean: ${value}`)
-}
-
-function definedFields(input) {
-  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined))
+function parseOptionalField(value) {
+  if (value === undefined) return undefined
+  if (value === null || value === "") return null
+  return value
 }
 
 function print(value) {

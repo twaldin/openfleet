@@ -36,7 +36,7 @@ Orchestrator (Claude Code / OpenCode / Codex)
   |
   +-- Remote Gateway (Discord — real-time message routing + status boards)
   +-- Cron Scheduler (heartbeat, periodic scans, market hours)
-  +-- Task Pipeline (create -> dispatch -> execute -> review -> merge)
+  +-- Task System (create -> execute -> complete)
   +-- Web Dashboard (fleet health, terminal panes, event stream)
   |
   +-- Agent: coder (any harness, worktree-isolated)
@@ -62,10 +62,8 @@ All state lives in `~/.openfleet/` as flat JSON files — no database, no daemon
 ~/.openfleet/
   agents.json        Agent identities, roles, models, channels
   registry.json      Live session metadata
-  tasks.json         Task lifecycle (created -> dispatched -> completed)
-  jobs.json          Work units dispatched to agents
-  workflows.json     Multi-step pipelines
-  blockers.json      Work blocked on human input
+  tasks.json         Flat tasks: {id, title, status, assignee, blocked_on}
+  jobs.json          Work units assigned to agents
   cron.json          Scheduled jobs (prompts, targets, intervals)
   events.jsonl       Append-only event log
   agents/            Per-agent workspaces (SOUL.md, MEMORY.md, state)
@@ -103,8 +101,7 @@ AGENTS
   attach <name>       Connect to agent tmux window
 
 TASKS
-  task create|list|update   Task lifecycle
-  dispatch                  Dispatch job to agent
+  task create|list|update|show   Flat task lifecycle
   complete <job-id>         Report job completion
 
 COMMUNICATION
@@ -132,7 +129,6 @@ OpenFleet uses a remote gateway for real-time communication between you and the 
 - **Inbound:** Messages route from Discord channels to agents in real-time
 - **Outbound:** Agents post to their assigned Discord channels
 - **Status boards:** Auto-updating embeds showing fleet health
-- **Approval flow:** Permission prompts surface as embeds with reaction-based approve/deny
 - **Read receipts:** Delivered messages get a reaction
 
 Agents communicate outbound via `openfleet post "message"` — the bridge routes it to whatever remote is configured.
@@ -156,12 +152,12 @@ OpenFleet writes agent instructions in the right format per harness:
 | OpenCode | `.opencode/agents/<name>.md` | Agent config with frontmatter |
 | Codex | `AGENTS.md` | Markdown with OpenFleet section |
 
-Instructions include identity, role playbook, Discord channels, completion protocol, blocker protocol, and all CLI commands the agent needs.
+Instructions include identity, role playbook, Discord channels, completion protocol, blocked-task protocol, and all CLI commands the agent needs.
 
 ## Project Structure
 
 ```
-bin/                    CLI entry points (24 scripts)
+bin/                    CLI entry points
   openfleet             Unified CLI
   start                 Cold-boot script
   init                  Setup wizard
@@ -174,18 +170,17 @@ bin/                    CLI entry points (24 scripts)
   ...
 
 core/                   Runtime modules
-  runtime/              State management (13 modules)
+  runtime/              State management
   harness/              Harness adapters
   remote/               Remote messaging adapters
   routing.js            Channel binding + message routing
-  dispatch.js           Job dispatch + profile selection
   instructions.js       Agent instruction projection
   ops.js                Observability + dashboards
   ...
 
-internal/               28 internal service scripts
+internal/               Internal service scripts
 lib/                    Shared utilities
-test/                   86 tests
+test/                   Test suite
 ```
 
 ## Roadmap
@@ -219,9 +214,9 @@ test/                   86 tests
 ## Development
 
 ```bash
-npm test          # 86 tests
-npm test -- --watch   # watch mode
-node bin/openfleet status   # verify fleet
+npm test
+npm test -- --watch
+node bin/openfleet status
 ```
 
 ## License

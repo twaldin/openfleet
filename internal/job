@@ -5,8 +5,6 @@ const path = require("path")
 const { parseArgs } = require("../lib/opencode")
 const { createEventStore } = require("../core/runtime/events")
 const { createJob, getJob, listJobs, updateJob } = require("../core/runtime/jobs")
-const { advanceWorkflow, getWorkflow } = require("../core/runtime/workflows")
-const { dispatchJob } = require("../core/dispatch")
 
 function main() {
   const args = parseArgs(process.argv.slice(2))
@@ -19,7 +17,6 @@ function main() {
       type: args.type,
       status: args.status,
       agent: args.agent,
-      workflow_id: args.workflow,
       trigger: args.trigger,
       input: parseJson(args.input),
     })
@@ -46,38 +43,6 @@ function main() {
       completed_at: new Date().toISOString(),
     })
     eventStore.append({ type: "job.completed", agent_id: job.agent || "system", payload: job })
-
-    if (args.continue && job.workflow_id) {
-      const workflow = getWorkflow(stateRoot, job.workflow_id)
-      if (workflow && workflow.status === "active") {
-        const advanced = advanceWorkflow(stateRoot, workflow.id)
-        eventStore.append({ type: "workflow.updated", agent_id: "openfleet", payload: advanced })
-        const step = advanced.current_step
-        if (!step) {
-          return print({ job, workflow: advanced, next: null })
-        }
-        const [agent, action] = step.split(".", 2)
-        const dispatched = dispatchJob(stateRoot, {
-          type: step,
-          agent,
-          workflow_id: advanced.id,
-          trigger: "workflow-complete",
-          role: agent,
-          input: {
-            step,
-            action,
-            workflow_id: advanced.id,
-            context: advanced.context,
-          },
-        })
-        if (args.execute) {
-          const { executeJob } = require("../core/execute")
-          const executed = executeJob(stateRoot, dispatched.job.id)
-          return print({ job, workflow: advanced, next: executed })
-        }
-        return print({ job, workflow: advanced, next: dispatched })
-      }
-    }
 
     return print(job)
   }

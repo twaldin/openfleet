@@ -7,12 +7,11 @@ const os = require("os")
 const path = require("path")
 const { execFileSync } = require("child_process")
 const { parseArgs } = require("../lib/opencode")
+const { formatSchedule, loadConfig, loadCronState } = require("./cron")
 const { ensureAuthToken } = require("../core/remote/config")
 const { loadAgents } = require("../core/runtime/agents")
 const { loadRegistry } = require("../core/runtime/registry")
-const { loadTasks, listTasks } = require("../core/runtime/tasks")
-const { loadBlockers, listBlockers } = require("../core/runtime/blockers")
-const { loadApprovals, listApprovals } = require("../core/runtime/approvals")
+const { listTasks } = require("../core/runtime/tasks")
 const { readEvents } = require("../core/runtime/events")
 
 const args = parseArgs(process.argv.slice(2))
@@ -154,10 +153,7 @@ function getFleetStatus() {
 }
 
 function getTasksData() {
-  const tasks = listTasks(STATE_ROOT)
-  const blockers = listBlockers(STATE_ROOT)
-  const approvals = listApprovals(STATE_ROOT)
-  return { tasks, blockers, approvals }
+  return { tasks: listTasks(STATE_ROOT) }
 }
 
 function getEventsData() {
@@ -166,21 +162,14 @@ function getEventsData() {
 }
 
 function getCronData() {
-  const cronStatePath = path.join(STATE_ROOT, "cron-state.json")
-  let lastFired = {}
-  try { lastFired = JSON.parse(fs.readFileSync(cronStatePath, "utf8")) } catch {}
-
-  const schedule = [
-    { id: "stock-monitor-spawn", schedule: "9:25 M-F", description: "Spawn stock monitor" },
-    { id: "stock-monitor-kill", schedule: "16:05 M-F", description: "Market close signal" },
-    { id: "monitor-health-check", schedule: "every 2h", description: "VPS health check" },
-    { id: "trader-scan", schedule: "every 4h", description: "Prediction market scan" },
-    { id: "heartbeat", schedule: "every 1h", description: "Orchestrator heartbeat" },
-  ]
-
-  return schedule.map(s => ({
-    ...s,
-    last_fired: lastFired[s.id] || null,
+  const config = loadConfig()
+  const lastFired = loadCronState()
+  return (config.jobs || []).map((job) => ({
+    id: job.id,
+    schedule: formatSchedule(job.schedule),
+    description: job.description || null,
+    target: job.target || null,
+    last_fired: lastFired[job.id] || null,
   }))
 }
 

@@ -4,66 +4,50 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const { buildApprovalSurface, buildBlockerSurface } = require('../core/ops')
+const { buildSummary } = require('../core/ops')
 const { createTask } = require('../core/runtime/tasks')
-const { createApproval } = require('../core/runtime/approvals')
-const { createBlocker } = require('../core/runtime/blockers')
 
 function tempStateDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'openfleet-remote-surfaces-'))
 }
 
-test('buildApprovalSurface renders pending approvals for a remote channel', () => {
+test('buildSummary renders blocked task details for a scoped agent', () => {
   const stateDir = tempStateDir()
-  const task = createTask(stateDir, {
+  createTask(stateDir, {
     title: 'Deploy release',
-    status: 'awaiting_approval',
+    status: 'blocked',
     assignee: 'coder',
-    channel_binding: 'thread://openfleet-discord-4',
-  })
-  createApproval(stateDir, {
-    task_id: task.id,
-    agent_id: 'coder',
-    action_type: 'deploy',
-    summary: 'Deploy release to production',
-    risk_class: 'high_impact',
-    status: 'pending',
-    channel_binding: task.channel_binding,
+    blocked_on: 'waiting for prod window',
   })
 
-  const surface = buildApprovalSurface(stateDir, {
+  const surface = buildSummary(stateDir, {
     agent: 'coder',
-    channelBinding: task.channel_binding,
   })
 
-  assert.match(surface, /Pending approvals for agent=coder @ thread:\/\/openfleet-discord-4/)
-  assert.match(surface, /Deploy release to production/)
-  assert.match(surface, /risk=high_impact/)
+  assert.match(surface, /Scope: agent=coder, channel=any/)
+  assert.match(surface, /Deploy release/)
+  assert.match(surface, /blocked_on=waiting for prod window/)
+  assert.doesNotMatch(surface, /approvals/i)
 })
 
-test('buildBlockerSurface renders open blockers for a remote channel', () => {
+test('buildSummary omits unrelated tasks from an agent scope', () => {
   const stateDir = tempStateDir()
-  const task = createTask(stateDir, {
+  createTask(stateDir, {
     title: 'Need clarification',
     status: 'blocked',
     assignee: 'coder',
-    channel_binding: 'thread://openfleet-discord-4',
+    blocked_on: 'Need deploy target',
   })
-  createBlocker(stateDir, {
-    task_id: task.id,
-    agent_id: 'coder',
-    summary: 'Need deploy target',
-    question: 'Should this go to staging or prod?',
+  createTask(stateDir, {
+    title: 'Monitor follow-up',
     status: 'open',
-    channel_binding: task.channel_binding,
+    assignee: 'monitor',
   })
 
-  const surface = buildBlockerSurface(stateDir, {
+  const surface = buildSummary(stateDir, {
     agent: 'coder',
-    channelBinding: task.channel_binding,
   })
 
-  assert.match(surface, /Open blockers for agent=coder @ thread:\/\/openfleet-discord-4/)
-  assert.match(surface, /Need deploy target/)
-  assert.match(surface, /Should this go to staging or prod\?/)
+  assert.match(surface, /Need clarification/)
+  assert.doesNotMatch(surface, /Monitor follow-up/)
 })

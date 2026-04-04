@@ -15,11 +15,9 @@ function main() {
   if (command === "create") {
     const task = createTask(stateRoot, {
       title: args.title,
-      source: parseJson(args.source),
       status: args.status,
       assignee: args.assignee,
-      workflow_id: args.workflow,
-      channel_binding: args.channel,
+      blocked_on: parseOptionalField(args['blocked-on']),
     })
     eventStore.append({ type: "task.created", agent_id: task.assignee || "openfleet", payload: task })
     return print(task)
@@ -28,10 +26,7 @@ function main() {
     const task = updateTask(stateRoot, id, {
       status: args.status,
       assignee: args.assignee,
-      workflow_id: args.workflow,
-      blocker_ids: parseJson(args.blockers) || undefined,
-      approval_ids: parseJson(args.approvals) || undefined,
-      channel_binding: args.channel || undefined,
+      blocked_on: parseOptionalField(args['blocked-on']),
     })
     eventStore.append({ type: "task.updated", agent_id: task.assignee || "openfleet", payload: task })
     return print(task)
@@ -41,6 +36,11 @@ function main() {
   throw new Error("Usage: taskobj <create|update|show|list>")
 }
 
-function parseJson(v) { return v ? JSON.parse(v) : null }
+function parseOptionalField(value) {
+  if (value === undefined) return undefined
+  if (value === null || value === "") return null
+  return value
+}
+
 function print(v) { process.stdout.write(`${JSON.stringify(v, null, 2)}\n`) }
 try { main() } catch (e) { console.error(e.message); process.exit(1) }

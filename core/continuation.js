@@ -1,66 +1,46 @@
-const { listJobs } = require("./runtime/jobs")
-const { listWorkflows } = require("./runtime/workflows")
-const { listBlockers } = require("./runtime/blockers")
-const { listApprovals } = require("./runtime/approvals")
+const { listTasks } = require("./runtime/tasks")
 
 function decideContinuation(stateDir, options = {}) {
   const source = options.source || null
-  const jobs = listJobs(stateDir)
-  const workflows = listWorkflows(stateDir)
-  const blockers = listBlockers(stateDir).filter((item) => item.status === "open")
-  const approvals = listApprovals(stateDir).filter((item) => item.status === "pending")
+  const tasks = listTasks(stateDir)
+  const openTasks = tasks.filter((task) => task.status === 'open')
+  const inProgressTasks = tasks.filter((task) => task.status === 'in_progress')
+  const blockedTasks = tasks.filter((task) => task.status === 'blocked')
+  const completedTasks = tasks.filter((task) => task.status === 'completed')
 
-  const runnableJobs = jobs.filter((job) => ["queued", "assigned"].includes(job.status))
-  const runningJobs = jobs.filter((job) => ["running", "dispatched"].includes(job.status))
-  const activeWorkflows = workflows.filter((wf) => wf.status === "active")
-  const blockedWorkflows = workflows.filter((wf) => wf.status === "blocked")
-  const approvalPausedWorkflows = workflows.filter((wf) => wf.status === "awaiting_approval")
-  const pausedWorkflows = workflows.filter((wf) => wf.status === "paused")
-
-  if (runnableJobs.length > 0) {
+  if (openTasks.length > 0) {
     return {
       decision: "continue",
-      reason: "runnable_jobs_exist",
+      reason: "open_tasks_exist",
       source,
-      counts: summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals),
+      counts: summarize(openTasks, inProgressTasks, blockedTasks, completedTasks),
     }
   }
 
-  if (activeWorkflows.length > 0 && runningJobs.length > 0) {
+  if (inProgressTasks.length > 0) {
     return {
       decision: "wait",
       reason: "work_in_progress",
       source,
-      counts: summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals),
+      counts: summarize(openTasks, inProgressTasks, blockedTasks, completedTasks),
     }
   }
 
-  if (pausedWorkflows.length > 0) {
-    return {
-      decision: 'wait',
-      reason: 'paused_workflows',
-      source,
-      counts: summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals),
-    }
-  }
-
-  if (blockers.length > 0 || approvals.length > 0 || blockedWorkflows.length > 0 || approvalPausedWorkflows.length > 0) {
+  if (blockedTasks.length > 0) {
     return {
       decision: "wait",
-      reason: "blocked_or_awaiting_approval",
+      reason: "blocked_tasks_exist",
       source,
-      counts: summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals),
+      counts: summarize(openTasks, inProgressTasks, blockedTasks, completedTasks),
     }
   }
 
-  // No runnable work, no running jobs, no blockers, no approvals — session can stop
-  if (runningJobs.length === 0 && blockers.length === 0 && approvals.length === 0 &&
-      activeWorkflows.length === 0 && blockedWorkflows.length === 0 && approvalPausedWorkflows.length === 0) {
+  if (tasks.length === 0 || completedTasks.length === tasks.length) {
     return {
       decision: "stop",
       reason: "all_work_complete",
       source,
-      counts: summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals),
+      counts: summarize(openTasks, inProgressTasks, blockedTasks, completedTasks),
     }
   }
 
@@ -68,20 +48,16 @@ function decideContinuation(stateDir, options = {}) {
     decision: "wait",
     reason: "no_runnable_work",
     source,
-    counts: summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals),
+    counts: summarize(openTasks, inProgressTasks, blockedTasks, completedTasks),
   }
 }
 
-function summarize(runnableJobs, runningJobs, activeWorkflows, blockedWorkflows, approvalPausedWorkflows, pausedWorkflows, blockers, approvals) {
+function summarize(openTasks, inProgressTasks, blockedTasks, completedTasks) {
   return {
-    runnable_jobs: runnableJobs.length,
-    running_jobs: runningJobs.length,
-    active_workflows: activeWorkflows.length,
-    blocked_workflows: blockedWorkflows.length,
-    approval_paused_workflows: approvalPausedWorkflows.length,
-    paused_workflows: pausedWorkflows.length,
-    open_blockers: blockers.length,
-    pending_approvals: approvals.length,
+    open_tasks: openTasks.length,
+    in_progress_tasks: inProgressTasks.length,
+    blocked_tasks: blockedTasks.length,
+    completed_tasks: completedTasks.length,
   }
 }
 

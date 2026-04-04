@@ -7,34 +7,18 @@ const path = require('node:path')
 const { buildSummary } = require('../core/ops')
 const { createTask } = require('../core/runtime/tasks')
 const { createJob } = require('../core/runtime/jobs')
-const { createBlocker } = require('../core/runtime/blockers')
-const { createApproval } = require('../core/runtime/approvals')
 
 function tempStateDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'openfleet-ops-summary-'))
 }
 
-test('buildSummary includes open tasks, blockers, and approvals', () => {
+test('buildSummary includes flat task details and scheduled work', () => {
   const stateDir = tempStateDir()
-  const task = createTask(stateDir, {
+  createTask(stateDir, {
     title: 'Fix remote summary',
-    status: 'active',
+    status: 'blocked',
     assignee: 'coder',
-    channel_binding: 'thread://openfleet-discord-5',
-  })
-  createBlocker(stateDir, {
-    task_id: task.id,
-    agent_id: 'coder',
-    summary: 'Need channel routing answer',
-    status: 'open',
-    channel_binding: task.channel_binding,
-  })
-  createApproval(stateDir, {
-    task_id: task.id,
-    agent_id: 'coder',
-    summary: 'Approve summary rollout',
-    status: 'pending',
-    channel_binding: task.channel_binding,
+    blocked_on: 'Need channel routing answer',
   })
   createJob(stateDir, {
     type: 'stock-monitor.check',
@@ -51,53 +35,35 @@ test('buildSummary includes open tasks, blockers, and approvals', () => {
 
   const summary = buildSummary(stateDir)
 
-  assert.match(summary, /Open tasks:/)
+  assert.match(summary, /Tasks:/)
   assert.match(summary, /Fix remote summary/)
-  assert.match(summary, /Open blockers:/)
-  assert.match(summary, /Need channel routing answer/)
-  assert.match(summary, /Pending approvals:/)
-  assert.match(summary, /Approve summary rollout/)
+  assert.match(summary, /blocked_on=Need channel routing answer/)
+  assert.doesNotMatch(summary, /Open blockers:/)
+  assert.doesNotMatch(summary, /Pending approvals:/)
   assert.match(summary, /Scheduled jobs:/)
   assert.match(summary, /stock-monitor\.check -> stock-monitor \[scheduler\]/)
   assert.match(summary, /Maintenance loops:/)
   assert.match(summary, /monitor\.detect -> monitor \[maintenance-loop\]/)
 })
 
-test('buildSummary can scope task state to an agent channel', () => {
+test('buildSummary can scope task state to an agent', () => {
   const stateDir = tempStateDir()
   createTask(stateDir, {
     title: 'Coder task',
-    status: 'active',
+    status: 'open',
     assignee: 'coder',
-    channel_binding: 'thread://coder',
   })
   createTask(stateDir, {
     title: 'Monitor task',
-    status: 'active',
-    assignee: 'monitor',
-    channel_binding: 'thread://monitor',
-  })
-  createBlocker(stateDir, {
-    agent_id: 'coder',
-    summary: 'Coder blocker',
     status: 'open',
-    channel_binding: 'thread://coder',
-  })
-  createApproval(stateDir, {
-    agent_id: 'monitor',
-    summary: 'Monitor approval',
-    status: 'pending',
-    channel_binding: 'thread://monitor',
+    assignee: 'monitor',
   })
 
   const summary = buildSummary(stateDir, {
     agent: 'coder',
-    channelBinding: 'thread://coder',
   })
 
-  assert.match(summary, /Scope: agent=coder, channel=thread:\/\/coder/)
+  assert.match(summary, /Scope: agent=coder, channel=any/)
   assert.match(summary, /Coder task/)
-  assert.match(summary, /Coder blocker/)
   assert.doesNotMatch(summary, /Monitor task/)
-  assert.doesNotMatch(summary, /Monitor approval/)
 })

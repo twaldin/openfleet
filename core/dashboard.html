@@ -168,6 +168,13 @@ html, body {
   border-left-color: var(--blue);
 }
 
+.agent-summary-row {
+  padding: 8px 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-top: 1px dashed rgba(48, 54, 61, 0.6);
+}
+
 .agent-status-indicator {
   width: 8px;
   height: 8px;
@@ -357,18 +364,17 @@ html, body {
 
 .task-item {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px 16px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
   font-size: 12px;
   border-bottom: 1px solid rgba(48, 54, 61, 0.4);
 }
 
-.task-icon {
-  flex-shrink: 0;
-  width: 16px;
-  text-align: center;
-  margin-top: 1px;
+.task-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .task-title {
@@ -377,12 +383,38 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: 500;
 }
 
-.task-assignee {
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
-  flex-shrink: 0;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-open { background: rgba(88, 166, 255, 0.15); color: var(--blue); }
+.status-in_progress { background: rgba(63, 185, 80, 0.18); color: var(--green); }
+.status-completed { background: rgba(139, 148, 158, 0.18); color: var(--text-muted); }
+.status-blocked { background: rgba(248, 81, 73, 0.18); color: var(--red); }
+
+.task-assignee,
+.task-blocked {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .event-item {
@@ -928,9 +960,11 @@ html, body {
   function renderAgents(agentData) {
     agents = agentData;
     $agentList.innerHTML = "";
-    $agentCount.textContent = agents.length;
+    const visibleAgents = getVisibleAgents(agentData);
+    const hiddenDeadEphemeralCount = Math.max(0, agentData.length - visibleAgents.length);
+    $agentCount.textContent = hiddenDeadEphemeralCount ? (visibleAgents.length + " + " + hiddenDeadEphemeralCount + " hidden") : visibleAgents.length;
 
-    for (const agent of agents) {
+    for (const agent of visibleAgents) {
       const el = document.createElement("div");
       el.className = "agent-item" + (selectedAgent === agent.name ? " selected" : "");
       el.dataset.name = agent.name;
@@ -944,35 +978,34 @@ html, body {
       el.addEventListener("click", function() { selectAgent(agent.name); });
       $agentList.appendChild(el);
     }
+
+    if (hiddenDeadEphemeralCount > 0) {
+      const hidden = document.createElement("div");
+      hidden.className = "agent-summary-row";
+      hidden.textContent = "+ " + hiddenDeadEphemeralCount + " dead ephemeral agents hidden";
+      $agentList.appendChild(hidden);
+    }
   }
 
   function renderTasks(data) {
     const tasks = data.tasks || [];
-    const blockerMap = {};
-    for (const b of (data.blockers || [])) {
-      if (b.task_id) {
-        if (!blockerMap[b.task_id]) blockerMap[b.task_id] = [];
-        blockerMap[b.task_id].push(b);
-      }
-    }
 
     $taskList.innerHTML = "";
     $taskCount.textContent = tasks.length;
 
     for (const task of tasks.slice(0, 30)) {
-      const hasBlocker = blockerMap[task.id] && blockerMap[task.id].some(function(b) { return b.status === "open"; });
-      let icon = "\u2b1c"; // white square — created
-      if (hasBlocker) icon = "\ud83d\udd34"; // red circle — blocked
-      else if (task.status === "in-progress" || task.status === "running") icon = "\ud83d\udd35"; // blue
-      else if (task.status === "done" || task.status === "completed") icon = "\u2705"; // check
-      else if (task.status === "failed") icon = "\u274c";
-
       const el = document.createElement("div");
       el.className = "task-item";
+      const statusClass = "status-" + String(task.status || "open").replace(/[^a-z0-9_]+/gi, "_");
       el.innerHTML =
-        '<span class="task-icon">' + icon + '</span>' +
-        '<span class="task-title" title="' + esc(task.title || task.id) + '">' + esc(task.title || task.id) + '</span>' +
-        '<span class="task-assignee">' + esc(task.assignee || "") + '</span>';
+        '<div class="task-header">' +
+          '<span class="task-title" title="' + esc(task.title || task.id) + '">' + esc(task.title || task.id) + '</span>' +
+          '<span class="status-badge ' + statusClass + '">' + esc(task.status || 'open') + '</span>' +
+        '</div>' +
+        '<div class="task-meta">' +
+          '<span class="task-assignee">assignee: ' + esc(task.assignee || 'unassigned') + '</span>' +
+          (task.blocked_on ? '<span class="task-blocked">blocked_on: ' + esc(task.blocked_on) + '</span>' : '') +
+        '</div>';
       $taskList.appendChild(el);
     }
   }
@@ -984,7 +1017,7 @@ html, body {
       el.className = "event-item";
       const t = evt.ts ? new Date(evt.ts) : null;
       const timeStr = t ? (String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0")) : "??:??";
-      const detail = evt.payload ? (evt.payload.text || evt.payload.direction || JSON.stringify(evt.payload).slice(0, 80)) : "";
+      const detail = summarizeEvent(evt);
       el.innerHTML =
         '<span class="event-time">' + esc(timeStr) + '</span>' +
         '<span class="event-type">' + esc(evt.type || "?") + '</span>' +
@@ -996,6 +1029,13 @@ html, body {
 
   function renderCron(crons) {
     $cronBar.innerHTML = '<span class="cron-label">Cron</span>';
+    if (!crons.length) {
+      const empty = document.createElement("span");
+      empty.className = "cron-item";
+      empty.textContent = "No cron jobs configured";
+      $cronBar.appendChild(empty);
+      return;
+    }
     for (const c of crons) {
       const lastStr = c.last_fired ? timeAgo(new Date(c.last_fired)) : "never";
       const el = document.createElement("span");
@@ -1012,6 +1052,33 @@ html, body {
     $fleetStatus.innerHTML = '<span class="status-dot ' + dotClass + '"></span>' + (aliveCount > 0 ? "Online" : "No agents");
     $fleetCount.textContent = aliveCount + "/" + totalCount + " alive";
     $uptime.textContent = "up " + formatDuration(data.uptime_ms || 0);
+  }
+
+  function getVisibleAgents(agentData) {
+    return agentData.filter(function(agent) {
+      if (selectedAgent && agent.name === selectedAgent) return true;
+      if (agent.alive || agent.status === "alive" || agent.status === "dormant") return true;
+      return agent.role === "persistent" || agent.role === "orchestrator";
+    });
+  }
+
+  function summarizeEvent(evt) {
+    const payload = evt.payload || {};
+    if (evt.type === "task.created" || evt.type === "task.updated") {
+      return [payload.title || payload.id || "task", payload.status ? "status=" + payload.status : null, payload.blocked_on ? "blocked_on=" + payload.blocked_on : null].filter(Boolean).join(" | ");
+    }
+    if (evt.type === "job.created" || evt.type === "job.updated" || evt.type === "job.completed") {
+      return [payload.type || payload.id || "job", payload.status ? "status=" + payload.status : null, payload.agent ? "agent=" + payload.agent : null].filter(Boolean).join(" | ");
+    }
+    if (evt.type === "action.executed") {
+      return [payload.action || "action", payload.message || payload.output || null].filter(Boolean).join(" | ");
+    }
+    if (payload.summary) return payload.summary;
+    if (payload.title) return payload.title;
+    if (payload.text) return payload.text;
+    if (payload.direction) return payload.direction;
+    if (payload.job_id) return "job=" + payload.job_id;
+    return JSON.stringify(payload).slice(0, 120);
   }
 
   // --- Agent selection + pane ---

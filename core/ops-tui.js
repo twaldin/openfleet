@@ -17,16 +17,15 @@ function renderOpsTui(stateRoot, options = {}) {
     'Tasks',
     ...(dashboard.task_items.length
       ? dashboard.task_items.slice(0, 6).map((task) => {
-          const owner = task.logical_owner || '-'
-          const worker = task.active_agent || '-'
-          const step = task.current_step || task.workflow_status || task.status || 'unknown'
-          return `${task.title} | owner=${owner} | worker=${worker} | ${task.active_runtime_instance || '-'} | ${step}`
+          const details = [`status=${task.status || 'unknown'}`, `assignee=${task.assignee || '-'}`]
+          if (task.blocked_on) details.push(`blocked_on=${task.blocked_on}`)
+          return `${task.title} | ${details.join(' | ')}`
         })
       : ['none']),
   ]
 
   const jobs = [
-    'Jobs / Workflows',
+    'Jobs',
     ...(dashboard.in_progress_jobs.length
       ? dashboard.in_progress_jobs.slice(0, 4).map((job) => `${job.type} -> ${job.agent || 'unassigned'} [${job.status}]`)
       : ['no in-progress jobs']),
@@ -34,24 +33,20 @@ function renderOpsTui(stateRoot, options = {}) {
       ? dashboard.runnable_jobs.slice(0, 3).map((job) => `queued: ${job.type} -> ${job.agent || 'unassigned'}`)
       : []),
     `scheduled: ${dashboard.scheduled_jobs.length} | loops: ${dashboard.maintenance_loops.length}`,
-    `active workflows: ${dashboard.active_workflows.length}`,
   ]
 
-  const flow = [
-    'Blockers / Approvals',
-    ...(dashboard.open_blockers.length
-      ? dashboard.open_blockers.slice(0, 3).map((item) => `blocker: ${item.agent_id || 'unknown'} | ${item.summary}`)
-      : ['blocker: none']),
-    ...(dashboard.pending_approvals.length
-      ? dashboard.pending_approvals.slice(0, 3).map((item) => `approval: ${item.agent_id || 'unknown'} | ${item.summary}`)
-      : ['approval: none']),
+  const taskStatus = [
+    'Task Status',
+    `open: ${dashboard.tasks.open || 0}`,
+    `in_progress: ${dashboard.tasks.in_progress || 0}`,
+    `blocked: ${dashboard.tasks.blocked || 0}`,
+    `completed: ${dashboard.tasks.completed || 0}`,
   ]
 
   const left = [
     box('OpenFleet Ops', [
       `updated ${dashboard.generated_at}`,
-      `counts agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs} workflows=${dashboard.counts.workflows} tasks=${dashboard.counts.tasks}`,
-      `flow blockers=${dashboard.open_blockers.length} approvals=${dashboard.pending_approvals.length}`,
+      `counts agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs} tasks=${dashboard.counts.tasks}`,
     ], leftWidth),
     box(agents[0], agents.slice(1), leftWidth),
     box(tasks[0], tasks.slice(1), leftWidth),
@@ -59,7 +54,7 @@ function renderOpsTui(stateRoot, options = {}) {
 
   const right = [
     box(jobs[0], jobs.slice(1), rightWidth),
-    box(flow[0], flow.slice(1), rightWidth),
+    box(taskStatus[0], taskStatus.slice(1), rightWidth),
     box('Keys', ['r refresh', 'q quit', 'use: ops-ui --once for snapshot'], rightWidth),
   ]
 

@@ -28,7 +28,6 @@ function createJob(stateDir, input) {
     type: input.type || "task",
     status: input.status || "queued",
     agent: input.agent || null,
-    workflow_id: input.workflow_id || input.workflowId || null,
     trigger: input.trigger || null,
     input: input.input || null,
     output: input.output || null,

@@ -3,12 +3,9 @@
 const os = require("os")
 const path = require("path")
 const { parseArgs } = require("../lib/opencode")
-const { buildCaptureSurface, buildDashboard, buildDashboardSurface, buildFollowSurface, buildSummary, defaultStateRoot, fetchSessionMessages, inspectAgent, listAgentMetadata, renderListSurface, renderMessages } = require("../core/ops")
+const { buildCaptureSurface, buildDashboard, buildDashboardSurface, buildFollowSurface, buildPresenceSurface, buildSummary, defaultStateRoot, fetchSessionMessages, inspectAgent, listAgentMetadata, renderListSurface, renderMessages } = require("../core/ops")
 const { listJobs, getJob } = require("../core/runtime/jobs")
-const { listWorkflows, getWorkflow } = require("../core/runtime/workflows")
 const { listTasks, getTask } = require("../core/runtime/tasks")
-const { listBlockers, getBlocker } = require("../core/runtime/blockers")
-const { listApprovals, getApproval } = require("../core/runtime/approvals")
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
@@ -31,6 +28,10 @@ async function main() {
     }
     case "summary": {
       process.stdout.write(`${buildSummary(stateRoot)}\n`)
+      return
+    }
+    case "presence": {
+      process.stdout.write(`${buildPresenceSurface(stateRoot, { agent: target || null })}\n`)
       return
     }
     case "inspect": {
@@ -80,13 +81,6 @@ async function main() {
       if (!target) throw new Error("Usage: ops job <id>")
       return output(getJob(stateRoot, target), json)
     }
-    case "workflows": {
-      return output(listWorkflows(stateRoot), json)
-    }
-    case "workflow": {
-      if (!target) throw new Error("Usage: ops workflow <id>")
-      return output(getWorkflow(stateRoot, target), json)
-    }
     case "tasks": {
       return output(listTasks(stateRoot), json)
     }
@@ -94,22 +88,8 @@ async function main() {
       if (!target) throw new Error("Usage: ops task <id>")
       return output(getTask(stateRoot, target), json)
     }
-    case "blockers": {
-      return output(listBlockers(stateRoot), json)
-    }
-    case "blocker": {
-      if (!target) throw new Error("Usage: ops blocker <id>")
-      return output(getBlocker(stateRoot, target), json)
-    }
-    case "approvals": {
-      return output(listApprovals(stateRoot), json)
-    }
-    case "approval": {
-      if (!target) throw new Error("Usage: ops approval <id>")
-      return output(getApproval(stateRoot, target), json)
-    }
     default:
-      throw new Error("Usage: ops <dashboard|summary|agents|inspect|tail|follow|capture|jobs|job|workflows|workflow|tasks|task|blockers|blocker|approvals|approval> [target] [--json] [--limit N]")
+      throw new Error("Usage: ops <dashboard|summary|presence|agents|inspect|tail|follow|capture|jobs|job|tasks|task> [target] [--json] [--limit N]")
   }
 }
 
