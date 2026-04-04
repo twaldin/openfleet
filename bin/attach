@@ -83,23 +83,11 @@ function main() {
 }
 
 function isAlive(session) {
-  // Check tmux window
+  // Agent is alive if it has a live tmux window
   if (session.tmux_session && session.tmux_window) {
     try {
       const wins = execSync(`tmux list-windows -t ${session.tmux_session} -F '#{window_name}' 2>/dev/null`, { encoding: "utf8" })
       if (wins.split("\n").includes(session.tmux_window)) return true
-    } catch {}
-  }
-  // Check opencode session exists and isn't archived
-  if (session.session_id) {
-    try {
-      const host = process.env.OPENCODE_SERVER_HOST || "127.0.0.1"
-      const port = process.env.OPENCODE_SERVER_PORT || "4096"
-      const raw = execFileSync("curl", ["-sS", "--max-time", "2", `http://${host}:${port}/session/${session.session_id}`], {
-        encoding: "utf8", stdio: ["pipe", "pipe", "ignore"],
-      })
-      const s = JSON.parse(raw)
-      if (s && !s.time?.archived) return true
     } catch {}
   }
   return false
