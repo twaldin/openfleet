@@ -43,6 +43,7 @@ async function startDashboard(stateRoot, t) {
     env: {
       ...process.env,
       OPENFLEET_CANONICAL_STATE_DIR: stateRoot,
+      OPENFLEET_DASHBOARD_SSE_INTERVAL_MS: "100",
     },
     stdio: ["ignore", "pipe", "pipe"],
   })
@@ -75,6 +76,21 @@ function authHeaders(token) {
   return { Authorization: `Bearer ${token}` }
 }
 
+async function waitForStreamClose(reader, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now()
+    const result = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timed out waiting for SSE close")), remaining)),
+    ])
+
+    if (result.done) return
+  }
+
+  throw new Error("Timed out waiting for SSE close")
+}
+
 test("dashboard start generates a persistent auth token", async (t) => {
   const stateRoot = tempStateDir()
   await startDashboard(stateRoot, t)
@@ -87,9 +103,13 @@ test("dashboard API rejects requests without a bearer token and accepts valid to
   const stateRoot = tempStateDir()
   const { baseUrl } = await startDashboard(stateRoot, t)
   const token = readToken(stateRoot)
+  const wrongToken = token.slice(0, -1) + (token.endsWith("0") ? "1" : "0")
 
   const unauthorized = await fetch(`${baseUrl}/api/status`)
   assert.equal(unauthorized.status, 401)
+
+  const wrongTokenResponse = await fetch(`${baseUrl}/api/status`, { headers: authHeaders(wrongToken) })
+  assert.equal(wrongTokenResponse.status, 401)
 
   const authorized = await fetch(`${baseUrl}/api/status`, { headers: authHeaders(token) })
   assert.equal(authorized.status, 200)
@@ -114,6 +134,11 @@ test("rotating the auth token invalidates the old dashboard token", async (t) =>
   const { baseUrl } = await startDashboard(stateRoot, t)
   const oldToken = readToken(stateRoot)
 
+  const sseResponse = await fetch(`${baseUrl}/api/stream?token=${oldToken}`)
+  assert.equal(sseResponse.status, 200)
+  const reader = sseResponse.body.getReader()
+  await reader.read()
+
   execFileSync("node", [path.join(__dirname, "..", "bin", "auth"), "rotate", "--state-root", stateRoot], {
     encoding: "utf8",
   })
@@ -123,6 +148,11 @@ test("rotating the auth token invalidates the old dashboard token", async (t) =>
 
   const oldResponse = await fetch(`${baseUrl}/api/status`, { headers: authHeaders(oldToken) })
   assert.equal(oldResponse.status, 401)
+
+  const oldSseResponse = await fetch(`${baseUrl}/api/stream?token=${oldToken}`)
+  assert.equal(oldSseResponse.status, 401)
+
+  await waitForStreamClose(reader)
 
   const newResponse = await fetch(`${baseUrl}/api/status`, { headers: authHeaders(newToken) })
   assert.equal(newResponse.status, 200)

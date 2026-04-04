@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // OpenFleet Dashboard — web UI for fleet monitoring and control
 const http = require("http")
+const crypto = require("crypto")
 const fs = require("fs")
 const os = require("os")
 const path = require("path")
@@ -39,6 +40,7 @@ const BIN = __dirname
 const CORE = path.join(__dirname, "..", "core")
 const NODE_MODULES = path.join(__dirname, "..", "node_modules")
 const START_TIME = Date.now()
+const SSE_INTERVAL_MS = Number(process.env.OPENFLEET_DASHBOARD_SSE_INTERVAL_MS || 5000)
 
 // --- Liveness check (same pattern as agent-lifecycle) ---
 
@@ -265,23 +267,48 @@ function spawnAgent(body) {
 
 // --- SSE ---
 
-const sseClients = new Set()
+const sseClients = new Map()
+
+function tokensEqual(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string") return false
+
+  const providedBuffer = Buffer.from(provided)
+  const expectedBuffer = Buffer.from(expected)
+  if (providedBuffer.length !== expectedBuffer.length) return false
+
+  return crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+}
+
+function closeSSEClient(res) {
+  sseClients.delete(res)
+  try { res.end() } catch {}
+}
+
+function pruneUnauthorizedSSEClients() {
+  const expectedToken = ensureAuthToken(STATE_ROOT)
+  for (const [res, token] of sseClients.entries()) {
+    if (!tokensEqual(token, expectedToken)) {
+      closeSSEClient(res)
+    }
+  }
+}
 
 function broadcastSSE(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
-  for (const res of sseClients) {
-    try { res.write(msg) } catch { sseClients.delete(res) }
+  for (const res of sseClients.keys()) {
+    try { res.write(msg) } catch { closeSSEClient(res) }
   }
 }
 
 // Push status + events every 5 seconds
 setInterval(() => {
+  pruneUnauthorizedSSEClients()
   if (sseClients.size === 0) return
   try {
     broadcastSSE("status", getFleetStatus())
     broadcastSSE("events", getEventsData())
   } catch {}
-}, 5000)
+}, SSE_INTERVAL_MS)
 
 // --- HTTP Server ---
 
@@ -328,10 +355,10 @@ function isAuthorizedDashboardRequest(req, url) {
   if (!expectedToken) return false
 
   if (url.pathname === "/api/stream") {
-    return url.searchParams.get("token") === expectedToken
+    return tokensEqual(url.searchParams.get("token"), expectedToken)
   }
 
-  return readBearerToken(req) === expectedToken
+  return tokensEqual(readBearerToken(req), expectedToken)
 }
 
 const MIME = {
@@ -433,7 +460,7 @@ const server = http.createServer(async (req, res) => {
         "Access-Control-Allow-Origin": "*",
       })
       res.write(`event: status\ndata: ${JSON.stringify(getFleetStatus())}\n\n`)
-      sseClients.add(res)
+      sseClients.set(res, url.searchParams.get("token"))
       req.on("close", () => sseClients.delete(res))
       return
     }
