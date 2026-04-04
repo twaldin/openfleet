@@ -5,6 +5,65 @@ const path = require("path")
 
 const binDir = __dirname
 
+function renderHelp() {
+  return `openfleet — harness-agnostic agent orchestration
+
+USAGE
+  openfleet <command> [args...]
+
+STATE
+  status              Fleet dashboard overview
+  agents              List all agents and health
+  dashboard           Full dashboard
+  summary             Compact summary
+  presence            Agent presence/activity
+  watch [args]        Interactive operations dashboard
+  poll [args]         Poll Discord messages
+
+WEB
+  web-dashboard [--port N]  Web dashboard (default: 3000)
+
+TASKS
+  task <subcommand>   Task lifecycle (create, list, update, etc.)
+  execute [args]      Execute a job
+  spawn [args]        Spawn agents in any harness
+  kill <name>         Kill tmux window openfleet:<name>
+
+JOBS
+  report-completion <job-id>  Report job completion
+  complete <job-id>           Alias for report-completion
+
+COMMUNICATION
+  send <agent> <msg>          Message an agent
+  message <agent> <msg>       Alias for send
+  post <message>              Post to your remote channel (provider-agnostic)
+  remote [args]               Remote operations
+  discord <subcommand>        Discord operations (post, summary, etc.)
+  auth <subcommand>           Dashboard auth token management
+
+PROFILES
+  profile <subcmd>    Runtime profile management
+  profiles            List all runtime profiles
+  host <subcmd>       Remote host management
+
+OPERATIONS
+  bridge [args]       Start remote event bridge
+  capture [args]      Start passive agent capture daemon
+  maintenance [args]  Run maintenance loop
+  reconcile [args]    Reconcile fleet state
+  orchestrator [args] Orchestrator controls
+  events [args]       Tail event log
+  mcp [args]          Start MCP server
+
+SETUP
+  init                Interactive setup wizard
+  start               Cold-boot the fleet (tmux + infra + agents)
+
+HELP
+  help                Show this help
+`
+}
+
 const commands = {
   // State queries
   status: () => run("ops", ["dashboard"]),
@@ -71,62 +130,7 @@ const commands = {
 
   // Help
   help: () => {
-    console.log(`openfleet — harness-agnostic agent orchestration
-
-USAGE
-  openfleet <command> [args...]
-
-STATE
-  status              Fleet dashboard overview
-  agents              List all agents and health
-  dashboard           Full dashboard
-  summary             Compact summary
-  presence            Agent presence/activity
-  watch [args]        Interactive operations dashboard
-  poll [args]         Poll Discord messages
-
-WEB
-  web-dashboard [--port N]  Web dashboard (default: 3000)
-
-TASKS
-  task <subcommand>   Task lifecycle (create, list, update, etc.)
-  execute [args]      Execute a job
-  spawn [args]        Spawn agents in any harness
-  kill <name>         Kill tmux window openfleet:<name>
-
-JOBS
-  report-completion <job-id>  Report job completion
-  complete <job-id>           Alias for report-completion
-
-COMMUNICATION
-  send <agent> <msg>          Message an agent
-  message <agent> <msg>       Alias for send
-  post <message>              Post to your remote channel (provider-agnostic)
-  remote [args]               Remote operations
-  discord <subcommand>        Discord operations (post, summary, etc.)
-  auth <subcommand>           Dashboard auth token management
-
-PROFILES
-  profile <subcmd>    Runtime profile management
-  profiles            List all runtime profiles
-  host <subcmd>       Remote host management
-
-OPERATIONS
-  bridge [args]       Start remote event bridge
-  capture [args]      Start passive agent capture daemon
-  maintenance [args]  Run maintenance loop
-  reconcile [args]    Reconcile fleet state
-  orchestrator [args] Orchestrator controls
-  events [args]       Tail event log
-  mcp [args]          Start MCP server
-
-SETUP
-  init                Interactive setup wizard
-  start               Cold-boot the fleet (tmux + infra + agents)
-
-HELP
-  help                Show this help
-`)
+    console.log(renderHelp())
   },
 }
 
@@ -176,4 +180,12 @@ function main() {
   handler(rest)
 }
 
-main()
+if (require.main === module) {
+  main()
+}
+
+module.exports = {
+  commands,
+  main,
+  renderHelp,
+}

@@ -1,470 +1,198 @@
 #!/usr/bin/env node
-// openfleet init — interactive setup wizard for new deployments
-const readline = require("readline")
-const fs = require("fs")
-const os = require("os")
-const path = require("path")
+const { execFileSync } = require("node:child_process")
+const fs = require("node:fs")
+const path = require("node:path")
+const readline = require("node:readline")
 
-const OPENFLEET_DIR = path.join(os.homedir(), ".openfleet")
+const { defaultStateRoot, generateAuthToken, saveRemoteConfig } = require("../core/remote/config")
+const { saveAgents } = require("../core/runtime/agents")
+const { saveActiveOrchestrator } = require("../core/runtime/orchestrator")
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function createRL() {
-  return readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  })
+const MODEL_CHOICES = ["claude", "gpt", "local"]
+const HARNESS_CHOICES = ["claude-code", "opencode", "openclaw"]
+const DEFAULT_DASHBOARD_URL = process.env.OPENFLEET_DASHBOARD_URL || "http://localhost:3000"
+const DEFAULT_HEARTBEAT_CRON = {
+  jobs: [
+    {
+      id: "heartbeat",
+      description: "Hourly fleet heartbeat",
+      schedule: { intervalMinutes: 60 },
+      target: "parent",
+      action: "message",
+      prompt: "[HEARTBEAT] Check fleet health, blocked work, and new messages. Report only material changes.",
+    },
+  ],
 }
 
-function ask(rl, question, defaultValue) {
-  const suffix = defaultValue != null ? ` [${defaultValue}]` : ""
-  return new Promise((resolve) => {
-    rl.question(`${question}${suffix}: `, (answer) => {
-      const trimmed = answer.trim()
-      resolve(trimmed || (defaultValue != null ? String(defaultValue) : ""))
-    })
-  })
-}
-
-function askSecret(rl, question) {
-  return new Promise((resolve) => {
-    process.stdout.write(`${question}: `)
-    const stdin = process.stdin
-    const wasRaw = stdin.isRaw
-    if (stdin.isTTY) stdin.setRawMode(true)
-
-    let buf = ""
-    function onData(ch) {
-      const c = ch.toString()
-      if (c === "\n" || c === "\r") {
-        stdin.removeListener("data", onData)
-        if (stdin.isTTY && !wasRaw) stdin.setRawMode(false)
-        process.stdout.write("\n")
-        resolve(buf)
-      } else if (c === "\u0003") {
-        // ctrl-c
-        process.exit(1)
-      } else if (c === "\u007f" || c === "\b") {
-        buf = buf.slice(0, -1)
-      } else {
-        buf += c
-      }
-    }
-    stdin.on("data", onData)
-  })
-}
-
-async function askChoice(rl, question, choices, defaultValue) {
-  const choiceStr = choices
-    .map((c) => (c === defaultValue ? `[${c}]` : c))
-    .join(" / ")
-  const answer = await ask(rl, `${question} (${choiceStr})`, null)
-  if (!answer) return defaultValue
-  const match = choices.find((c) => c.toLowerCase().startsWith(answer.toLowerCase()))
-  return match || defaultValue
-}
-
-async function askYN(rl, question, defaultYes = true) {
-  const hint = defaultYes ? "[Y/n]" : "[y/N]"
-  const answer = await ask(rl, `${question} ${hint}`, null)
-  if (!answer) return defaultYes
-  return answer.toLowerCase().startsWith("y")
-}
-
-function writeJSON(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n")
-}
-
-function defaultModel(harness) {
-  switch (harness) {
-    case "claude-code":
-      return "opus-4.6"
-    case "codex":
-      return "gpt-5.4"
-    case "opencode":
-      return "gpt-5.4"
-    default:
-      return "opus-4.6"
-  }
-}
-
-function defaultProvider(harness) {
-  switch (harness) {
-    case "claude-code":
-      return "anthropic"
-    case "codex":
-      return "openai"
-    case "opencode":
-      return "openai"
-    default:
-      return "anthropic"
-  }
-}
-
-// ── Main ─────────────────────────────────────────────────────────────────────
-
-async function main() {
-  // --help shortcut
-  if (process.argv.includes("--help") || process.argv.includes("-h")) {
-    console.log(`openfleet init — interactive setup wizard
-
-Creates the ~/.openfleet directory and generates:
-  - deployment.json   Fleet deployment configuration
-  - profiles.json     Runtime profile definitions
-  - orchestrator.json Orchestrator session config
-  - discord.json      Discord bot config (optional)
+function renderHelp() {
+  return `openfleet init - interactive setup wizard
 
 Usage:
   openfleet init
-  node bin/init
+
+Creates ~/.openfleet with:
+  - remote.json
+  - agents.json
+  - cron.json
+  - agents/cairn/
 
 Options:
   --help, -h    Show this help message
-`)
-    process.exit(0)
+`
+}
+
+function createPrompter({ input = process.stdin, output = process.stdout } = {}) {
+  const rl = readline.createInterface({ input, output })
+
+  return {
+    ask(message, { defaultValue = "" } = {}) {
+      const suffix = defaultValue ? ` [${defaultValue}]` : ""
+      return new Promise((resolve) => {
+        rl.question(`${message}${suffix}: `, (answer) => {
+          const trimmed = answer.trim()
+          resolve(trimmed || defaultValue)
+        })
+      })
+    },
+    close() {
+      rl.close()
+    },
   }
+}
 
-  const rl = createRL()
+async function askChoice(prompter, writeLine, message, choices, defaultValue) {
+  while (true) {
+    const answer = await prompter.ask(`${message} (${choices.join("/")})`, { defaultValue })
+    const normalized = String(answer || "").trim().toLowerCase()
+    const match = choices.find((choice) => choice.toLowerCase() === normalized)
+    if (match) return match
+    writeLine(`Choose one of: ${choices.join(", ")}`)
+  }
+}
 
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8")
+}
+
+function printQrIfPossible(url, { writeLine = console.log } = {}) {
   try {
-    await runWizard(rl)
-  } finally {
-    rl.close()
+    const qr = execFileSync("qrencode", ["-t", "ANSIUTF8", url], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    if (!qr.trim()) return false
+
+    writeLine("Dashboard QR:")
+    for (const line of qr.trimEnd().split("\n")) {
+      writeLine(line)
+    }
+    return true
+  } catch {
+    return false
   }
 }
 
-async function runWizard(rl) {
-  console.log()
-  console.log("╔══════════════════════════════════════════════════════════╗")
-  console.log("║                    openfleet init                       ║")
-  console.log("║                                                        ║")
-  console.log("║  Harness-agnostic agent orchestration for AI CLI tools. ║")
-  console.log("║  Manage fleets of Claude Code, Codex, and OpenCode     ║")
-  console.log("║  agents from a single control plane.                   ║")
-  console.log("╚══════════════════════════════════════════════════════════╝")
-  console.log()
+async function runWizard(prompter, {
+  stateRoot = defaultStateRoot(),
+  writeLine = console.log,
+  tokenGenerator = generateAuthToken,
+  dashboardUrl = DEFAULT_DASHBOARD_URL,
+  printQr = printQrIfPossible,
+  now = () => new Date().toISOString(),
+} = {}) {
+  writeLine("Welcome to OpenFleet.")
+  writeLine("OpenFleet gives you one control plane for AI CLI agents across Claude Code, OpenCode, and OpenClaw.")
+  writeLine()
 
-  // ── 1. Create ~/.openfleet ──────────────────────────────────────────────
+  const discordToken = await prompter.ask("Discord bot token (optional - press enter to skip)")
+  const discordGuild = discordToken
+    ? await prompter.ask("Discord guild ID")
+    : ""
 
-  if (fs.existsSync(OPENFLEET_DIR)) {
-    console.log(`Config directory exists: ${OPENFLEET_DIR}`)
-    const overwrite = await askYN(rl, "Overwrite existing config files?", false)
-    if (!overwrite) {
-      console.log("Aborting. Existing config preserved.")
-      return
-    }
-  } else {
-    fs.mkdirSync(OPENFLEET_DIR, { recursive: true })
-    console.log(`Created ${OPENFLEET_DIR}`)
-  }
+  const model = await askChoice(prompter, writeLine, "Default model", MODEL_CHOICES, "claude")
+  const harness = await askChoice(prompter, writeLine, "Default harness", HARNESS_CHOICES, "claude-code")
+  const authToken = tokenGenerator()
 
-  console.log()
+  const agentsRoot = path.join(stateRoot, "agents")
+  const orchestratorDir = path.join(agentsRoot, "cairn")
+  fs.mkdirSync(orchestratorDir, { recursive: true })
 
-  // ── 2. Deployment name ──────────────────────────────────────────────────
-
-  const deploymentName = await ask(rl, "Deployment name", path.basename(os.homedir()))
-
-  // ── 3. Discord ──────────────────────────────────────────────────────────
-
-  console.log()
-  console.log("── Discord Integration ──")
-  console.log("OpenFleet can route agent messages through Discord.")
-  console.log("You can skip this and configure it later.")
-  console.log()
-
-  let discordConfig = null
-  const wantDiscord = await askYN(rl, "Set up Discord now?", false)
-
-  if (wantDiscord) {
-    const token = await askSecret(rl, "Bot token (hidden)")
-    if (!token) {
-      console.log("No token provided, skipping Discord.")
-    } else {
-      const guildId = await ask(rl, "Guild (server) ID", null)
-      if (!guildId) {
-        console.log("No guild ID provided, skipping Discord.")
-      } else {
-        discordConfig = {
-          token,
-          guild_id: guildId,
-          channels: {},
-        }
-      }
-    }
-  }
-
-  console.log()
-
-  // ── 4. Workspace root ──────────────────────────────────────────────────
-
-  const cwd = process.cwd()
-  const workspaceRoot = await ask(rl, "Workspace root (where agents work)", cwd)
-
-  // ── 5. Orchestrator harness ────────────────────────────────────────────
-
-  console.log()
-  console.log("── Orchestrator ──")
-  console.log("Which AI CLI harness runs your orchestrator?")
-  console.log()
-
-  const harness = await askChoice(
-    rl,
-    "Harness",
-    ["claude-code", "opencode", "codex"],
-    "claude-code",
-  )
-
-  const model = await ask(rl, "Model", defaultModel(harness))
-
-  console.log()
-
-  // ── 6. State and log directories ───────────────────────────────────────
-
-  const stateDir = OPENFLEET_DIR
-  const logDir = path.join(OPENFLEET_DIR, "logs")
-
-  // ── 7. Generate configs ────────────────────────────────────────────────
-
-  const created = []
-
-  // deployment.json
-  const deployment = {
-    name: deploymentName,
-    workspaceRoot,
-    server: {
-      host: "127.0.0.1",
-      port: 4096,
-      stateDir,
-      logDir,
+  saveRemoteConfig(stateRoot, {
+    provider: discordToken ? "discord" : null,
+    discord: {
+      token: discordToken || null,
+      guild: discordGuild || null,
     },
-    parent: {
-      agent: deploymentName,
-      sessionScript: null,
+    defaults: {
+      model,
+      harness,
     },
-    routing: {
-      assistant_channel: `channel://${deploymentName}`,
-      default_human_channel: `channel://${deploymentName}`,
-      direct_message_policy: "agent-channel-preferred",
-      server_architecture: {
-        server_name: "OpenFleet",
-        status_channel: "channel://fleet-status",
-        tasks_channel: "channel://tasks",
-        categories: [
-          {
-            name: "control-plane",
-            channels: [
-              `channel://${deploymentName}`,
-              "channel://fleet-status",
-              "channel://tasks",
-              "channel://alerts",
-            ],
-          },
-          {
-            name: "agents",
-            channels: ["channel://code-status"],
-          },
-          {
-            name: "reports",
-            channels: ["channel://daily"],
-          },
-        ],
-      },
-      persistent_agent_channels: {
-        [deploymentName]: `channel://${deploymentName}`,
-        coder: "channel://code-status",
-      },
+    auth: {
+      token: authToken,
     },
-    jobs: {},
-  }
+  })
 
-  const deploymentPath = path.join(OPENFLEET_DIR, "deployment.json")
-  writeJSON(deploymentPath, deployment)
-  created.push(deploymentPath)
+  saveAgents(stateRoot, {})
+  writeJson(path.join(stateRoot, "cron.json"), DEFAULT_HEARTBEAT_CRON)
 
-  // discord.json (optional)
-  if (discordConfig) {
-    const discordPath = path.join(OPENFLEET_DIR, "discord.json")
-    writeJSON(discordPath, discordConfig)
-    created.push(discordPath)
-  }
-
-  // profiles.json
-  const provider = defaultProvider(harness)
-  const profileId = `${harness.replace("-", "-")}-${model.replace(/[^a-z0-9]/gi, "")}-orchestrator`
-  const profiles = {
-    profiles: {
-      [profileId]: {
-        profile_id: profileId,
-        harness,
-        provider,
-        model,
-        host: "local",
-        role: "orchestrator",
-        status: "available",
-        cost_class: "high",
-        latency_class: "medium",
-      },
-    },
-  }
-
-  const profilesPath = path.join(OPENFLEET_DIR, "profiles.json")
-  writeJSON(profilesPath, profiles)
-  created.push(profilesPath)
-
-  // orchestrator.json
-  const orchestrator = {
-    profile_id: profileId,
+  saveActiveOrchestrator(stateRoot, {
+    name: "cairn",
+    agent_id: "cairn",
     harness,
-    session_id: null,
-    tmux_session: "openfleet",
-    tmux_window: deploymentName,
-    workdir: workspaceRoot,
     model,
-    activated_at: new Date().toISOString(),
-  }
+    tmux_session: "openfleet",
+    tmux_window: "cairn",
+    workdir: orchestratorDir,
+    activated_at: now(),
+  })
 
-  const orchestratorPath = path.join(OPENFLEET_DIR, "orchestrator.json")
-  writeJSON(orchestratorPath, orchestrator)
-  created.push(orchestratorPath)
-
-  // agents.json — canonical agent registry (starts with just the orchestrator)
-  const agentsPath = path.join(OPENFLEET_DIR, "agents.json")
-  if (!fs.existsSync(agentsPath)) {
-    writeJSON(agentsPath, {
-      agents: {
-        [deploymentName]: {
-          name: deploymentName,
-          role: "orchestrator",
-          harness,
-          model,
-          channel: "channel://" + deploymentName,
-          directory: workspaceRoot,
-        }
-      }
+  if (discordToken) {
+    writeJson(path.join(stateRoot, "discord.json"), {
+      token: discordToken,
+      guild_id: discordGuild || null,
+      channels: {},
     })
-    created.push(agentsPath)
   }
 
-  // cron.json — default schedule (heartbeat only)
-  const cronPath = path.join(OPENFLEET_DIR, "cron.json")
-  if (!fs.existsSync(cronPath)) {
-    writeJSON(cronPath, {
-      jobs: [
-        {
-          id: "heartbeat",
-          schedule: { intervalMinutes: 60 },
-          target: "parent",
-          action: "message",
-          prompt: "[HEARTBEAT] Hourly check. Read your HEARTBEAT.md for checklist. Check agent health, tasks, messages. Post to Discord only if something material changed."
-        }
-      ]
-    })
-    created.push(cronPath)
-  }
+  writeLine()
+  writeLine("Setup complete! Run openfleet start to boot the fleet.")
+  writeLine(`Dashboard URL: ${dashboardUrl}`)
+  writeLine(`Dashboard auth token: ${authToken}`)
+  printQr(dashboardUrl, { authToken, writeLine })
 
-  // Orchestrator workspace — SOUL.md, AGENTS.md, HEARTBEAT.md
-  const agentDir = path.join(OPENFLEET_DIR, "agents", deploymentName)
-  fs.mkdirSync(path.join(agentDir, "memory"), { recursive: true })
-
-  if (!fs.existsSync(path.join(agentDir, "SOUL.md"))) {
-    fs.writeFileSync(path.join(agentDir, "SOUL.md"), [
-      `# ${deploymentName} — OpenFleet Orchestrator`,
-      ``,
-      `You are the orchestrator of an OpenFleet deployment.`,
-      `You manage a fleet of AI agents across CLI harnesses (${harness}).`,
-      ``,
-      `## Values`,
-      `- Direct communication, no filler`,
-      `- Delegate work to agents — orchestrate, don't code directly`,
-      `- Be cost-aware — route to the cheapest capable model`,
-      ``,
-    ].join("\n"))
-    created.push(path.join(agentDir, "SOUL.md"))
+  return {
+    authToken,
+    dashboardUrl,
+    stateRoot,
   }
-
-  if (!fs.existsSync(path.join(agentDir, "HEARTBEAT.md"))) {
-    fs.writeFileSync(path.join(agentDir, "HEARTBEAT.md"), [
-      `# Heartbeat Checklist`,
-      ``,
-      `Run periodically. Only post to Discord if something material changed.`,
-      ``,
-      `- [ ] Check agent health: \`openfleet lifecycle status\``,
-      `- [ ] Check tasks: any blocked or urgent?`,
-      `- [ ] Check Discord: any unread messages?`,
-      `- [ ] Check deadlines: anything due within 24h?`,
-      ``,
-    ].join("\n"))
-    created.push(path.join(agentDir, "HEARTBEAT.md"))
-  }
-
-  // Ensure logs dir exists
-  if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true })
-  }
-
-  // ── 8. Summary ─────────────────────────────────────────────────────────
-
-  console.log()
-  console.log("╔══════════════════════════════════════════════════════════╗")
-  console.log("║                    Setup Complete                       ║")
-  console.log("╚══════════════════════════════════════════════════════════╝")
-  console.log()
-  console.log("Created:")
-  for (const f of created) {
-    console.log(`  ${f}`)
-  }
-
-  console.log()
-  console.log("Configuration:")
-  console.log(`  Deployment:  ${deploymentName}`)
-  console.log(`  Workspace:   ${workspaceRoot}`)
-  console.log(`  Harness:     ${harness}`)
-  console.log(`  Model:       ${model}`)
-  console.log(`  State dir:   ${stateDir}`)
-  if (discordConfig) {
-    console.log(`  Discord:     guild ${discordConfig.guild_id} (add channels to discord.json)`)
-  } else {
-    console.log(`  Discord:     not configured (run 'openfleet init' again to add)`)
-  }
-
-  // Symlink openfleet CLI to user bin
-  const openfleetBin = path.resolve(__dirname, "openfleet")
-  const userBinDirs = [
-    path.join(os.homedir(), ".local", "bin"),
-    path.join(os.homedir(), "bin"),
-    "/usr/local/bin",
-  ]
-  let linked = false
-  for (const dir of userBinDirs) {
-    const target = path.join(dir, "openfleet")
-    try {
-      fs.mkdirSync(dir, { recursive: true })
-      try { fs.unlinkSync(target) } catch {}
-      fs.symlinkSync(openfleetBin, target)
-      console.log(`  CLI:         symlinked to ${target}`)
-      linked = true
-      break
-    } catch {}
-  }
-  if (!linked) {
-    console.log(`  CLI:         add ${path.dirname(openfleetBin)} to your PATH`)
-  }
-
-  console.log()
-  console.log("Next steps:")
-  console.log("  1. Review and customize ~/.openfleet/deployment.json")
-  console.log("  2. Add runtime profiles:  openfleet profile upsert --id <name> --harness <h> --model <m> --role <role>")
-  if (!discordConfig) {
-    console.log("  3. (Optional) Set up Discord:  re-run 'openfleet init' or create ~/.openfleet/discord.json manually")
-  } else {
-    console.log("  3. Map Discord channels in ~/.openfleet/discord.json")
-  }
-  console.log("  4. Start the orchestrator:  openfleet orchestrator start")
-  console.log("  5. Spawn an agent:  openfleet spawn <name> --harness <h> --model <m>")
-  console.log()
 }
 
-main().catch((err) => {
-  console.error(err.message || err)
-  process.exit(1)
-})
+async function main(argv = process.argv.slice(2)) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(renderHelp())
+    return
+  }
+
+  const prompter = createPrompter()
+  try {
+    await runWizard(prompter)
+  } finally {
+    prompter.close()
+  }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message)
+    process.exit(1)
+  })
+}
+
+module.exports = {
+  createPrompter,
+  main,
+  printQrIfPossible,
+  renderHelp,
+  runWizard,
+}
