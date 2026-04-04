@@ -253,12 +253,19 @@ html, body {
   overflow: auto;
   padding: 8px 10px;
   background: #010409;
-  font-size: 9.5px;
-  line-height: 1.3;
+  font-size: 11px;
+  line-height: 1.25;
   white-space: pre;
-  overflow-x: auto;
+  overflow-x: hidden;
   color: #c9d1d9;
   min-height: 0;
+  cursor: text;
+}
+.pane-viewer:focus {
+  outline: 1px solid var(--border-focus);
+}
+.pane-viewer .cursor-line {
+  background: rgba(88, 166, 255, 0.08);
 }
 
 .pane-viewer .empty {
@@ -816,11 +823,54 @@ html, body {
     // Re-render agent list to update selection
     renderAgents(agents);
 
-    // Start refreshing pane
+    // Start refreshing pane (faster when focused for live typing feel)
     refreshPane();
     if (paneRefreshTimer) clearInterval(paneRefreshTimer);
-    paneRefreshTimer = setInterval(refreshPane, 3000);
+    paneRefreshTimer = setInterval(refreshPane, 2000);
+
+    // Make pane focusable for keyboard input
+    $paneViewer.tabIndex = 0;
+    $paneViewer.focus();
   }
+
+  // Live keyboard forwarding — when pane is focused, keystrokes go to agent
+  var keyBuffer = "";
+  var keyFlushTimer = null;
+
+  $paneViewer.addEventListener("keydown", function(e) {
+    if (!selectedAgent) return;
+    // Don't capture browser shortcuts
+    if (e.metaKey || e.ctrlKey && e.key !== "c") return;
+
+    e.preventDefault();
+    var key = "";
+    if (e.key === "Enter") key = "\n";
+    else if (e.key === "Backspace") key = "\b";
+    else if (e.key === "Escape") key = "\x1b";
+    else if (e.key === "Tab") key = "\t";
+    else if (e.ctrlKey && e.key === "c") key = "\x03";
+    else if (e.key.length === 1) key = e.key;
+    else return; // ignore F-keys, arrows for now
+
+    keyBuffer += key;
+    // Batch keystrokes and flush every 50ms for efficiency
+    if (!keyFlushTimer) {
+      keyFlushTimer = setTimeout(function() {
+        if (keyBuffer && selectedAgent) {
+          fetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/keys", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ keys: keyBuffer }),
+          }).then(function() {
+            // Refresh pane immediately after keystroke to see result
+            setTimeout(refreshPane, 200);
+          });
+          keyBuffer = "";
+        }
+        keyFlushTimer = null;
+      }, 50);
+    }
+  });
 
   function refreshPane() {
     if (!selectedAgent) return;

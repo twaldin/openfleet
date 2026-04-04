@@ -181,43 +181,49 @@ function getCronData() {
   }))
 }
 
-function capturePaneContent(agentName) {
-  // Try registry first
-  const reg = loadRegistry(STATE_ROOT)
-  let tmuxSession = null
-  let tmuxWindow = null
+function sendKeysToAgent(agentName, keys) {
+  const target = resolveAgentTmux(agentName)
+  if (!target) return { ok: false, error: "No tmux session for agent" }
+  try {
+    // Send literal keys — each character goes as a keystroke
+    for (const key of keys) {
+      if (key === "\n" || key === "\r") {
+        execFileSync("tmux", ["send-keys", "-t", `${target.session}:${target.window}`, "Enter"], { stdio: "ignore" })
+      } else if (key === "\x7f" || key === "\b") {
+        execFileSync("tmux", ["send-keys", "-t", `${target.session}:${target.window}`, "BSpace"], { stdio: "ignore" })
+      } else if (key === "\x1b") {
+        execFileSync("tmux", ["send-keys", "-t", `${target.session}:${target.window}`, "Escape"], { stdio: "ignore" })
+      } else {
+        execFileSync("tmux", ["send-keys", "-t", `${target.session}:${target.window}`, "-l", key], { stdio: "ignore" })
+      }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
 
+function resolveAgentTmux(agentName) {
+  const reg = loadRegistry(STATE_ROOT)
   for (const s of Object.values(reg.sessions)) {
     if ((s.name === agentName || s.agent_id === agentName) && s.tmux_session && s.tmux_window) {
-      tmuxSession = s.tmux_session
-      tmuxWindow = s.tmux_window
-      break
+      return { session: s.tmux_session, window: s.tmux_window }
     }
   }
+  try {
+    const orch = JSON.parse(readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8"))
+    if (agentName === "cairn") return { session: orch.tmux_session || "openfleet", window: orch.tmux_window || "cairn" }
+  } catch {}
+  const wins = getLiveTmuxWindows()
+  if (wins.has(agentName)) return { session: "openfleet", window: agentName }
+  return null
+}
 
-  // Fall back: check orchestrator.json for cairn
-  if (!tmuxSession) {
-    try {
-      const orch = JSON.parse(readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8"))
-      if (agentName === "cairn" || agentName === orch.parent?.agent) {
-        tmuxSession = orch.tmux_session || "openfleet"
-        tmuxWindow = orch.tmux_window || "cairn"
-      }
-    } catch {}
-  }
-
-  // Fall back: try tmux window named after the agent
-  if (!tmuxSession) {
-    const wins = getLiveTmuxWindows()
-    if (wins.has(agentName)) {
-      tmuxSession = "openfleet"
-      tmuxWindow = agentName
-    }
-  }
-
-  if (!tmuxSession || !tmuxWindow) {
-    return { error: "No tmux session for agent", content: "" }
-  }
+function capturePaneContent(agentName, cols) {
+  const target = resolveAgentTmux(agentName)
+  if (!target) return { error: "No tmux session for agent", content: "" }
+  const tmuxSession = target.session
+  const tmuxWindow = target.window
 
   try {
     const content = execFileSync("tmux", [
@@ -361,9 +367,18 @@ const server = http.createServer(async (req, res) => {
     // API: capture agent pane
     const paneMatch = pathname.match(/^\/api\/agents\/([^/]+)\/pane$/)
     if (paneMatch && req.method === "GET") {
-      const result = capturePaneContent(decodeURIComponent(paneMatch[1]))
+      const cols = parseInt(url.searchParams?.get("cols") || parsedUrl.query?.cols || "120")
+      const result = capturePaneContent(decodeURIComponent(paneMatch[1]), cols)
       if (result.error) return text(res, result.content || "", result.content ? 200 : 404)
       return text(res, result.content)
+    }
+
+    // API: send keystrokes to agent tmux pane (live typing)
+    const keysMatch = pathname.match(/^\/api\/agents\/([^/]+)\/keys$/)
+    if (keysMatch && req.method === "POST") {
+      const body = await readBody(req)
+      const result = sendKeysToAgent(decodeURIComponent(keysMatch[1]), body.keys || "")
+      return json(res, result, result.ok ? 200 : 500)
     }
 
     // API: send message to agent
