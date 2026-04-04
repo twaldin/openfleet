@@ -166,8 +166,29 @@ html, body {
   color: var(--text-muted);
 }
 
+.agent-section-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .agent-section-title {
   min-width: 0;
+}
+
+.agent-section-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(139, 148, 158, 0.16);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .agent-section-toggle {
@@ -1132,12 +1153,22 @@ html, body {
       });
     }
 
+    const titleGroup = document.createElement("span");
+    titleGroup.className = "agent-section-title-group";
+
     const title = document.createElement("span");
     title.className = "agent-section-title";
-    title.textContent = options.collapsible
-      ? options.title + " (" + options.agents.length + ")"
-      : options.title;
-    header.appendChild(title);
+    title.textContent = options.title;
+    titleGroup.appendChild(title);
+
+    if (options.collapsible) {
+      const badge = document.createElement("span");
+      badge.className = "agent-section-count-badge";
+      badge.textContent = String(options.agents.length);
+      titleGroup.appendChild(badge);
+    }
+
+    header.appendChild(titleGroup);
 
     const count = document.createElement("span");
     count.className = options.collapsible ? "agent-section-toggle-label" : "count";
