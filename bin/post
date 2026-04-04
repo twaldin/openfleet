@@ -14,7 +14,18 @@ function resolveAgentId() {
   // 1. Explicit env var
   if (process.env.OPENFLEET_AGENT_ID) return process.env.OPENFLEET_AGENT_ID
 
-  // 2. tmux window name (agents run in named windows)
+  // 2. Resolve from TMUX_PANE (identifies which pane the calling process is in)
+  //    display-message without -t returns the ACTIVE window, not the caller's window
+  if (process.env.TMUX_PANE) {
+    try {
+      const windowName = execFileSync("tmux", [
+        "display-message", "-t", process.env.TMUX_PANE, "-p", "#{window_name}",
+      ], { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).trim()
+      if (windowName && windowName !== "bash" && windowName !== "zsh") return windowName
+    } catch {}
+  }
+
+  // 3. Fallback: check parent process's tmux pane via /proc or ps
   try {
     const windowName = execFileSync("tmux", ["display-message", "-p", "#{window_name}"], {
       encoding: "utf8",
