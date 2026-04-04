@@ -19,6 +19,14 @@ test("idle_open_tasks condition fires when open tasks exist and none are in prog
   assert.equal(evaluateCondition({ type: "idle_open_tasks" }, { stateRoot: stateDir }), true)
 })
 
+test("idle_open_tasks condition treats legacy created tasks as open work", () => {
+  const stateDir = tempStateDir()
+  createTask(stateDir, { title: "Created task", status: "created" })
+  createTask(stateDir, { title: "Blocked task", status: "blocked" })
+
+  assert.equal(evaluateCondition({ type: "idle_open_tasks" }, { stateRoot: stateDir }), true)
+})
+
 test("idle_open_tasks condition does not fire without open tasks", () => {
   const stateDir = tempStateDir()
   createTask(stateDir, { title: "Blocked task", status: "blocked" })
@@ -31,6 +39,14 @@ test("idle_open_tasks condition does not fire when work is already in progress",
   const stateDir = tempStateDir()
   createTask(stateDir, { title: "Open task", status: "open" })
   createTask(stateDir, { title: "Working task", status: "in_progress" })
+
+  assert.equal(evaluateCondition({ type: "idle_open_tasks" }, { stateRoot: stateDir }), false)
+})
+
+test("idle_open_tasks condition treats legacy active tasks as in progress", () => {
+  const stateDir = tempStateDir()
+  createTask(stateDir, { title: "Open task", status: "open" })
+  createTask(stateDir, { title: "Active task", status: "active" })
 
   assert.equal(evaluateCondition({ type: "idle_open_tasks" }, { stateRoot: stateDir }), false)
 })

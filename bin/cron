@@ -11,6 +11,8 @@ const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.hom
 const CRON_CONFIG = path.join(STATE_ROOT, "cron.json")
 const CRON_STATE = path.join(STATE_ROOT, "cron-state.json")
 const BIN = __dirname
+const OPEN_TASK_STATUSES = new Set(["open", "created"])
+const IN_PROGRESS_TASK_STATUSES = new Set(["in_progress", "active"])
 
 function loadConfig() {
   try {
@@ -63,10 +65,10 @@ function evaluateCondition(condition, { stateRoot }) {
   const type = typeof condition === "string" ? condition : condition.type
   if (type === "idle_open_tasks") {
     const tasks = listTasks(stateRoot)
-    if (tasks.some((task) => task.status === "in_progress")) {
+    if (tasks.some((task) => IN_PROGRESS_TASK_STATUSES.has(task.status))) {
       return false
     }
-    return tasks.some((task) => task.status === "open")
+    return tasks.some((task) => OPEN_TASK_STATUSES.has(task.status))
   }
 
   throw new Error(`Unknown cron condition type: ${type || "<missing>"}`)

@@ -40,3 +40,30 @@ test("task-state blocker update can escalate a blocker to human", () => {
   assert.equal(updated.blocked_on_type, "human")
   assert.equal(updated.escalated, true)
 })
+
+test("task-state blocker update preserves type and escalation when omitted", () => {
+  const stateDir = tempStateDir()
+  const blocker = createBlocker(stateDir, {
+    summary: "Need approval",
+    blocked_on_type: "human",
+    escalated: true,
+    blocked_on_id: "user_tim",
+  })
+
+  execFileSync("node", [
+    path.join(__dirname, "..", "bin", "task-state"),
+    "blocker",
+    "update",
+    blocker.id,
+    "--state-root",
+    stateDir,
+    "--status",
+    "open",
+  ], { encoding: "utf8" })
+
+  const updated = getBlocker(stateDir, blocker.id)
+  assert.equal(updated.status, "open")
+  assert.equal(updated.blocked_on_type, "human")
+  assert.equal(updated.escalated, true)
+  assert.equal(updated.blocked_on_id, "user_tim")
+})
