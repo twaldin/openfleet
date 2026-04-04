@@ -287,8 +287,16 @@ async function pollPermissions() {
       })
   } catch { return }
 
-  // Only skip gateway's own window — all agents including orchestrator get permission prompts
-  const SKIP_WINDOWS = new Set(["gateway"])
+  // Skip infrastructure windows and the orchestrator (has a human at the keyboard)
+  const SKIP_WINDOWS = new Set(["gateway", "cron", "dashboard", "bridge", "capture"])
+  // Also skip the orchestrator — permission prompts there are interactive UI, not unattended agents
+  const orchestratorWindow = (() => {
+    try {
+      const orch = JSON.parse(require("fs").readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8"))
+      return orch.tmux_window || null
+    } catch { return null }
+  })()
+  if (orchestratorWindow) SKIP_WINDOWS.add(orchestratorWindow)
 
   for (const { index: winIndex, name: windowName } of windowEntries) {
     if (pendingPrompts.has(windowName)) continue
