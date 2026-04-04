@@ -2,33 +2,41 @@
   "name": "openfleet",
   "version": "1.0.0",
   "type": "commonjs",
-  "description": "Harness-agnostic agent fleet orchestration. One control plane for Claude Code, OpenCode, Codex, and any AI CLI tool.",
+  "description": "Harness-agnostic AI agent orchestrator",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/twaldin/openfleet.git"
   },
+  "homepage": "https://github.com/twaldin/openfleet#readme",
+  "bugs": {
+    "url": "https://github.com/twaldin/openfleet/issues"
+  },
   "keywords": [
     "ai",
-    "agents",
-    "fleet",
-    "orchestration",
+    "agent",
+    "orchestrator",
     "claude",
-    "openai",
-    "codex",
     "opencode",
-    "mcp",
-    "discord"
+    "openclaw",
+    "mcp"
   ],
   "bin": {
-    "openfleet": "bin/openfleet"
+    "openfleet": "./bin/openfleet"
   },
+  "files": [
+    "bin/",
+    "core/",
+    "lib/",
+    "skills/",
+    "internal/"
+  ],
   "scripts": {
     "test": "node --test",
     "start": "node bin/openfleet gateway"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
