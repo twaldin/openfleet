@@ -24,6 +24,7 @@ module.exports = {
   remote: require("./remote"),
   routing: require("./routing"),
   instructions: require("./instructions"),
+  capabilities: require("./capabilities"),
   envelope: require("./envelope"),
   playbooks: require("./playbooks"),
   stalled: require("./stalled"),
