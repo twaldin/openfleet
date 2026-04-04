@@ -21,7 +21,7 @@ function buildAgentInstructions(agent, role, deployment, options = {}) {
 
   const stateRoot = options.stateRoot || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const workspaceDir = path.join(stateRoot, "agents", agent)
-  const isPersistent = role === "persistent" || role === "orchestrator" || role === "monitor"
+  const isPersistent = role === "persistent" || role === "orchestrator"
   const rootDir = path.resolve(__dirname, "..")
 
   const sections = []

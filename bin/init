@@ -317,7 +317,7 @@ async function runWizard(rl) {
     harness,
     session_id: null,
     tmux_session: "openfleet",
-    tmux_window: "1",
+    tmux_window: deploymentName,
     workdir: workspaceRoot,
     model,
     activated_at: new Date().toISOString(),
@@ -326,6 +326,76 @@ async function runWizard(rl) {
   const orchestratorPath = path.join(OPENFLEET_DIR, "orchestrator.json")
   writeJSON(orchestratorPath, orchestrator)
   created.push(orchestratorPath)
+
+  // agents.json — canonical agent registry (starts with just the orchestrator)
+  const agentsPath = path.join(OPENFLEET_DIR, "agents.json")
+  if (!fs.existsSync(agentsPath)) {
+    writeJSON(agentsPath, {
+      agents: {
+        [deploymentName]: {
+          name: deploymentName,
+          role: "orchestrator",
+          harness,
+          model,
+          channel: "channel://" + deploymentName,
+          directory: workspaceRoot,
+        }
+      }
+    })
+    created.push(agentsPath)
+  }
+
+  // cron.json — default schedule (heartbeat only)
+  const cronPath = path.join(OPENFLEET_DIR, "cron.json")
+  if (!fs.existsSync(cronPath)) {
+    writeJSON(cronPath, {
+      jobs: [
+        {
+          id: "heartbeat",
+          schedule: { intervalMinutes: 60 },
+          target: "parent",
+          action: "message",
+          prompt: "[HEARTBEAT] Hourly check. Read your HEARTBEAT.md for checklist. Check agent health, tasks, messages. Post to Discord only if something material changed."
+        }
+      ]
+    })
+    created.push(cronPath)
+  }
+
+  // Orchestrator workspace — SOUL.md, AGENTS.md, HEARTBEAT.md
+  const agentDir = path.join(OPENFLEET_DIR, "agents", deploymentName)
+  fs.mkdirSync(path.join(agentDir, "memory"), { recursive: true })
+
+  if (!fs.existsSync(path.join(agentDir, "SOUL.md"))) {
+    fs.writeFileSync(path.join(agentDir, "SOUL.md"), [
+      `# ${deploymentName} — OpenFleet Orchestrator`,
+      ``,
+      `You are the orchestrator of an OpenFleet deployment.`,
+      `You manage a fleet of AI agents across CLI harnesses (${harness}).`,
+      ``,
+      `## Values`,
+      `- Direct communication, no filler`,
+      `- Delegate work to agents — orchestrate, don't code directly`,
+      `- Be cost-aware — route to the cheapest capable model`,
+      ``,
+    ].join("\n"))
+    created.push(path.join(agentDir, "SOUL.md"))
+  }
+
+  if (!fs.existsSync(path.join(agentDir, "HEARTBEAT.md"))) {
+    fs.writeFileSync(path.join(agentDir, "HEARTBEAT.md"), [
+      `# Heartbeat Checklist`,
+      ``,
+      `Run periodically. Only post to Discord if something material changed.`,
+      ``,
+      `- [ ] Check agent health: \`openfleet lifecycle status\``,
+      `- [ ] Check tasks: any blocked or urgent?`,
+      `- [ ] Check Discord: any unread messages?`,
+      `- [ ] Check deadlines: anything due within 24h?`,
+      ``,
+    ].join("\n"))
+    created.push(path.join(agentDir, "HEARTBEAT.md"))
+  }
 
   // Ensure logs dir exists
   if (!fs.existsSync(logDir)) {
