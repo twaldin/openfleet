@@ -107,7 +107,7 @@ function respawnDormant(args) {
         "--model", model,
         "--dir", resolvedDir,
         "--bootstrap", prompt,
-      ], { encoding: "utf8", timeout: 60000 })
+      ], { encoding: "utf8", timeout: 180000 })
 
       const parsed = JSON.parse(result)
 

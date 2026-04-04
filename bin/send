@@ -137,14 +137,17 @@ function sleep(ms) {
 }
 
 function sendViaOpencodeRun(dir, message, port, agentName) {
-  const args = ["run", "--attach", `http://127.0.0.1:${port}`, "--dir", dir]
-  if (agentName) args.push("--agent", agentName)
-  args.push(message)
-  execFileSync("opencode", args, {
-    encoding: "utf8",
-    timeout: 120000,
-    stdio: "pipe",
-  })
+  // Use the TUI API to inject the message directly into the live TUI
+  // append-prompt sets the text, submit-prompt sends it
+  execFileSync("curl", [
+    "-sS", "-X", "POST", `http://127.0.0.1:${port}/tui/append-prompt`,
+    "-H", "Content-Type: application/json",
+    "-d", JSON.stringify({ text: message }),
+  ], { encoding: "utf8", timeout: 5000 })
+  sleep(500)
+  execFileSync("curl", [
+    "-sS", "-X", "POST", `http://127.0.0.1:${port}/tui/submit-prompt`,
+  ], { encoding: "utf8", timeout: 5000 })
 }
 
 function hasTmuxWindow(session, window) {

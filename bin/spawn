@@ -68,9 +68,8 @@ function main() {
       break
     case "opencode":
       // Headless server + TUI attached to it
-      // serve runs in background, attach gives live TUI in the tmux pane
       opencodePort = 14000 + Math.abs([...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0) % 1000)
-      launchCmd = `opencode serve --port ${opencodePort} & sleep 3 && opencode attach http://127.0.0.1:${opencodePort} --dir ${workdir}`
+      launchCmd = `bash -c 'opencode serve --port ${opencodePort} & sleep 4; opencode attach http://127.0.0.1:${opencodePort} --dir ${workdir}'`
       break
     default:
       console.error(`Unknown harness: ${harness}`)
@@ -81,8 +80,8 @@ function main() {
     "new-window", "-t", tmuxSession, "-n", name, "-c", workdir, launchCmd,
   ], { stdio: "ignore", shell: true })
 
-  // Wait for CLI to initialize
-  sleep(harness === "opencode" ? 5000 : 3000)
+  // Wait for CLI to initialize (opencode needs longer: serve start + attach)
+  sleep(harness === "opencode" ? 8000 : 3000)
 
   // Handle Codex trust prompt
   if (harness === "codex") {
@@ -96,16 +95,19 @@ function main() {
   // Send bootstrap prompt
   if (bootstrap) {
     if (harness === "opencode" && opencodePort) {
-      // OpenCode headless: use opencode run --attach to send to the server
+      // OpenCode: inject bootstrap via TUI API (append-prompt + submit-prompt)
       try {
-        execFileSync("opencode", [
-          "run", "--attach", `http://127.0.0.1:${opencodePort}`,
-          "--dir", workdir, "--agent", name,
-          "-m", `openai/${model}`,
-          bootstrap,
-        ], { encoding: "utf8", timeout: 120000, stdio: "pipe" })
+        execFileSync("curl", [
+          "-sS", "-X", "POST", `http://127.0.0.1:${opencodePort}/tui/append-prompt`,
+          "-H", "Content-Type: application/json",
+          "-d", JSON.stringify({ text: bootstrap }),
+        ], { encoding: "utf8", timeout: 5000 })
+        sleep(500)
+        execFileSync("curl", [
+          "-sS", "-X", "POST", `http://127.0.0.1:${opencodePort}/tui/submit-prompt`,
+        ], { encoding: "utf8", timeout: 5000 })
       } catch (e) {
-        console.error(`Warning: bootstrap via opencode run failed: ${e.message}`)
+        console.error(`Warning: bootstrap via TUI API failed: ${e.message}`)
       }
     } else {
       sendToPane(tmuxSession, name, bootstrap)
