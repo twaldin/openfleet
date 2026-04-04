@@ -197,10 +197,17 @@ function isAlive(session) {
     } catch {}
   }
 
-  // Check opencode session freshness
-  if (session.session_id && session.updated_at) {
-    const age = Date.now() - new Date(session.updated_at).getTime()
-    if (age < 15 * 60 * 1000) return true
+  // Check opencode session exists and isn't archived
+  if (session.session_id) {
+    try {
+      const host = process.env.OPENCODE_SERVER_HOST || "127.0.0.1"
+      const port = process.env.OPENCODE_SERVER_PORT || "4096"
+      const raw = execFileSync("curl", ["-sS", "--max-time", "2", `http://${host}:${port}/session/${session.session_id}`], {
+        encoding: "utf8", stdio: ["pipe", "pipe", "ignore"],
+      })
+      const s = JSON.parse(raw)
+      if (s && !s.time?.archived) return true
+    } catch {}
   }
 
   return false
