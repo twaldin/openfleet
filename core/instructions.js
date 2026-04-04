@@ -78,12 +78,10 @@ function buildOpenFleetCommands(agent, role, deployment, rootDir) {
   const agentChannel = resolveChannelBinding(routing, { agent: role }) || resolveChannelBinding(routing, { agent }) || null
   const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
 
-  const postBin = path.join(rootDir, "bin", "post")
-
   const lines = [
     `# OpenFleet Commands`,
     ``,
-    `Post to your channel: node ${postBin} "<msg>"`,
+    `Post to your channel: openfleet post "<msg>"`,
     `Message parent: node ${sendBin} --to-parent --sender ${agent} --message "<update>"`,
     ``,
     `## Completion Protocol`,

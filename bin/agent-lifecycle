@@ -88,7 +88,7 @@ function respawnDormant(args) {
       fs.existsSync(soulFile) ? `Read your identity: ${soulFile}` : "",
       fs.existsSync(stateFile) ? `Read your last state: ${stateFile}` : "",
       fs.existsSync(memoryFile) ? `Read your memory: ${memoryFile}` : "",
-      `Resume your normal operations. Post a status update to your Discord channel using: node ~/openfleet/bin/post "your update"`,
+      `Resume your normal operations. Post a status update to your Discord channel using: openfleet post "your update"`,
     ].filter(Boolean).join("\n")
 
     try {
