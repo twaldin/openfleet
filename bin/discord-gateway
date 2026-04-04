@@ -26,6 +26,15 @@ const { createServer } = require("http")
 const os = require("os")
 const path = require("path")
 const crypto = require("crypto")
+const { getAgent } = require("../core/runtime/agents")
+const { loadSessionMetadata } = require("../core/runtime/session")
+const {
+  approveViaKeys,
+  buildEscalationMessage,
+  denyViaKeys,
+  evaluateSafety,
+  parsePermissionPrompt,
+} = require("../core/permission-resolver")
 
 // ---- Config ----------------------------------------------------------------
 
@@ -223,28 +232,21 @@ const pendingPrompts = new Map()
 const promptByMessageId = new Map()
 const resolvedHashes = new Map()
 
-const PERMISSION_PATTERNS = [
-  { re: /Do you want to allow/i, label: "tool-allow" },
-  { re: /Yes, allow once/, label: "tool-allow" },
-  { re: /Do you want to proceed/i, label: "mcp-approval" },
-  { re: /Do you want to create/i, label: "file-create" },
-  { re: /Esc to cancel/, label: "tool-allow" },
-  // Codex permission prompts
-  { re: /Do you trust the contents/i, label: "codex-trust" },
-  { re: /Would you like to run/i, label: "codex-run" },
-]
-
 function paneHash(text) {
   return crypto.createHash("sha1").update(text.slice(-500)).digest("hex").slice(0, 12)
 }
 
-function extractPromptDetails(paneText) {
-  const toolMatch = paneText.match(/Tool:\s*(.+)/i)
-  const inlineMatch = paneText.match(/[⏺●]\s*(Write|Bash|Edit|Read|Glob|Grep)\(([^)]*)\)/i)
-  const cmdMatch = paneText.match(/Command:\s*(.+)/i)
-  const tool = toolMatch?.[1]?.trim() || inlineMatch?.[1]?.trim() || "unknown"
-  const context = cmdMatch?.[1]?.trim() || inlineMatch?.[2]?.trim() || paneText.slice(-200).replace(/\x1b\[[0-9;]*m/g, "").trim()
-  return { tool, context }
+function expandHome(value) {
+  if (!value) return value
+  if (value === "~") return os.homedir()
+  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2))
+  return value
+}
+
+function resolveAgentWorkdir(agentName) {
+  const session = loadSessionMetadata(STATE_ROOT, agentName)
+  const agent = getAgent(STATE_ROOT, agentName)
+  return expandHome(session?.directory || agent?.directory || null)
 }
 
 async function pollPermissions() {
@@ -258,7 +260,7 @@ async function pollPermissions() {
       resolvedHashes.set(pending.paneHash, now)
       // Auto-deny
       try {
-        execFileSync("tmux", ["send-keys", "-t", `${TMUX_SESSION}:${name}`, "Down", "Down", "Enter"], { stdio: "ignore" })
+        denyViaKeys(TMUX_SESSION, name, pending.denySequence)
       } catch {}
       try {
         const ch = await client.channels.fetch(pending.channelId)
@@ -266,7 +268,8 @@ async function pollPermissions() {
         const embed = new EmbedBuilder()
           .setTitle(`Permission timed out — ${name}`)
           .setColor(0x95A5A6)
-          .addFields({ name: "Tool", value: pending.tool, inline: true }, { name: "Result", value: "AUTO-DENIED (5m)", inline: true })
+          .setDescription(buildEscalationMessage(name, pending.path))
+          .addFields({ name: "Prompt type", value: pending.patternId, inline: true }, { name: "Result", value: "AUTO-DENIED (5m)", inline: true })
         await msg.edit({ embeds: [embed] })
       } catch {}
     }
@@ -309,29 +312,38 @@ async function pollPermissions() {
     } catch { continue }
 
     const clean = paneText.replace(/\x1b\[[0-9;]*[mGKHFJABCDsuhlr]/g, "")
-    let matched = null
-    for (const { re, label } of PERMISSION_PATTERNS) {
-      if (re.test(clean)) { matched = { label }; break }
-    }
-    if (!matched) continue
+    const parsed = parsePermissionPrompt(clean, { agent: windowName })
+    if (!parsed) continue
 
     const hash = paneHash(clean)
     if (resolvedHashes.has(hash)) continue
 
-    // Find the channel for this agent — use agent's own channel, fall back to #alerts (never #orchestrator or #fleet-status)
-    const channelId = agentToChannelId[windowName] || config.channels?.[windowName] || config.channels?.["alerts"]
+    const agentWorkdir = resolveAgentWorkdir(windowName)
+    const safety = evaluateSafety(parsed.request || parsed.path, agentWorkdir)
+    if (safety === "safe") {
+      try {
+        approveViaKeys(TMUX_SESSION, windowName, parsed.approveSequence)
+        resolvedHashes.set(hash, now)
+        process.stderr.write(`openfleet-gateway: auto-approved safe permission prompt for ${windowName}: ${parsed.path}\n`)
+        continue
+      } catch (err) {
+        process.stderr.write(`openfleet-gateway: safe auto-approve failed for ${windowName}: ${err.message}\n`)
+      }
+    }
+
+    const channelId = config.channels?.["alerts"] || agentToChannelId[windowName] || config.channels?.[windowName]
     if (!channelId) continue
 
-    const { tool, context } = extractPromptDetails(clean)
     try {
       const ch = await client.channels.fetch(channelId)
       const embed = new EmbedBuilder()
         .setTitle(`Permission required — ${windowName}`)
         .setColor(0xFFA500)
+        .setDescription(buildEscalationMessage(windowName, parsed.path))
         .addFields(
-          { name: "Type", value: matched.label, inline: true },
-          { name: "Tool", value: tool, inline: true },
-          { name: "Context", value: context.slice(0, 1024), inline: false },
+          { name: "Prompt type", value: parsed.patternId, inline: true },
+          { name: "Requested path", value: (parsed.path || "(unknown)").slice(0, 1024), inline: false },
+          { name: "Agent workdir", value: (agentWorkdir || "(unknown)").slice(0, 1024), inline: false },
         )
         .setFooter({ text: "React ✅ to allow | ❌ to deny | Auto-denies in 5m" })
         .setTimestamp()
@@ -341,7 +353,8 @@ async function pollPermissions() {
 
       const pending = {
         agentName: windowName, channelId, messageId: sentMsg.id,
-        paneHash: hash, detectedAt: now, label: matched.label, tool, context,
+        paneHash: hash, detectedAt: now, patternId: parsed.patternId, path: parsed.path,
+        approveSequence: parsed.approveSequence, denySequence: parsed.denySequence,
       }
       pendingPrompts.set(windowName, pending)
       promptByMessageId.set(sentMsg.id, windowName)
@@ -678,9 +691,9 @@ client.on("messageReactionAdd", async (reaction, user) => {
   resolvedHashes.set(pending.paneHash, Date.now())
 
   if (decision === "allow") {
-    try { execFileSync("tmux", ["send-keys", "-t", `${TMUX_SESSION}:${agentName}`, "Enter"], { stdio: "ignore" }) } catch {}
+    try { approveViaKeys(TMUX_SESSION, agentName, pending.approveSequence) } catch {}
   } else {
-    try { execFileSync("tmux", ["send-keys", "-t", `${TMUX_SESSION}:${agentName}`, "Down", "Down", "Enter"], { stdio: "ignore" }) } catch {}
+    try { denyViaKeys(TMUX_SESSION, agentName, pending.denySequence) } catch {}
   }
 
   try {
@@ -689,7 +702,8 @@ client.on("messageReactionAdd", async (reaction, user) => {
     const embed = new EmbedBuilder()
       .setTitle(`Permission ${decision === "allow" ? "allowed" : "denied"} — ${agentName}`)
       .setColor(decision === "allow" ? 0x57F287 : 0xED4245)
-      .addFields({ name: "Tool", value: pending.tool, inline: true }, { name: "Decision", value: decision.toUpperCase(), inline: true })
+      .setDescription(buildEscalationMessage(agentName, pending.path))
+      .addFields({ name: "Prompt type", value: pending.patternId, inline: true }, { name: "Decision", value: decision.toUpperCase(), inline: true })
       .setTimestamp()
     await sentMsg.edit({ embeds: [embed] })
   } catch {}
