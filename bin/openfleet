@@ -29,8 +29,8 @@ const commands = {
   complete: (args) => run("report-completion", args),
 
   // Communication
-  send: (args) => run("message_agent", args),
-  message: (args) => run("message_agent", args),
+  send: (args) => run("send", args),
+  message: (args) => run("send", args),
   post: (args) => run("post", args),
   remote: (args) => run("remote", args),
   discord: (args) => run("remote", ["discord", ...args]),

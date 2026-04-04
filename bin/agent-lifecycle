@@ -149,10 +149,8 @@ function compactAgent(args) {
   console.log(`Telling ${name} to compact...`)
   try {
     execFileSync("node", [
-      path.join(BIN, "message_agent"), name,
-      "--agent", name,
-      "--canonical-state-dir", STATE_ROOT,
-      "COMPACT: Save your current state to your state.md file, summarize what you were working on, then acknowledge compaction is complete. After saving state, you can be safely restarted.",
+      path.join(BIN, "send"), name,
+      "--message", "COMPACT: Save your current state to your state.md file, summarize what you were working on, then acknowledge compaction is complete. After saving state, you can be safely restarted.",
     ], { encoding: "utf8", timeout: 15000 })
     console.log(`Compact message sent to ${name}`)
   } catch (e) {

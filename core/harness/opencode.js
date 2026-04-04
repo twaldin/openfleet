@@ -23,14 +23,8 @@ function executeOpencodeJob({ job, profile, prompt, stateRoot, exec = execFileSy
 
   const localMapping = mapLocalProfile(profile, agent)
 
-  const args = [
-    path.join(helperDir, "message_agent"),
-    localMapping.sessionName,
-    "--agent",
-    localMapping.agentProfile,
-    envelopedPrompt,
-  ]
-  exec(args[0], args.slice(1), { encoding: "utf8" })
+  const sendBin = path.join(path.resolve(helperDir, ".."), "bin", "send")
+  exec("node", [sendBin, localMapping.sessionName, "--message", envelopedPrompt], { encoding: "utf8" })
   return { ok: true, mode: "local", host: profile.host || "macbook", harness: "opencode", agent, session: localMapping.sessionName, agentProfile: localMapping.agentProfile }
 }
 

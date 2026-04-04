@@ -88,7 +88,7 @@ function executeJob(job) {
   if (target === "parent" || target === "orchestrator") {
     run("node", [path.join(BIN, "send"), "--to-parent", "--sender", "cron", "--message", prompt])
   } else {
-    run("node", [path.join(BIN, "message_agent"), target, "--agent", target, "--canonical-state-dir", STATE_ROOT, prompt])
+    run("node", [path.join(BIN, "send"), target, "--message", prompt])
   }
 }
 
