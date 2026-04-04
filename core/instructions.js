@@ -26,41 +26,38 @@ function buildAgentInstructions(agent, role, deployment, options = {}) {
 
   const sections = []
 
-  // --- SOUL.md (persistent/orchestrator only) ---
+  // --- Identity: inline SOUL.md (small, ~20 lines, defines who the agent is) ---
   if (isPersistent) {
     const soul = readWorkspaceFile(workspaceDir, "SOUL.md")
     if (soul) sections.push(soul)
   }
 
-  // --- AGENTS.md from workspace (if exists) ---
+  // --- Workspace AGENTS.md (if exists, inline — operational instructions) ---
   const agentsFile = readWorkspaceFile(workspaceDir, "AGENTS.md")
   if (agentsFile) {
     sections.push(agentsFile)
   }
 
-  // --- MEMORY.md summary (persistent only, first 50 lines) ---
-  if (isPersistent) {
-    const memory = readWorkspaceFile(workspaceDir, "MEMORY.md")
-    if (memory) {
-      const summary = memory.split("\n").slice(0, 50).join("\n")
-      sections.push("# Current Memory\n" + summary)
-    }
-  }
-
-  // --- Today's daily log (persistent only) ---
-  if (isPersistent) {
-    const today = new Date().toISOString().slice(0, 10)
-    const dailyLog = readWorkspaceFile(path.join(workspaceDir, "memory"), `${today}.md`)
-    if (dailyLog) {
-      const recent = dailyLog.split("\n").slice(-30).join("\n")
-      sections.push("# Today's Log\n" + recent)
-    }
-  }
-
-  // --- OpenFleet commands (always injected) ---
+  // --- OpenFleet commands (always, ~15 lines) ---
   sections.push(buildOpenFleetCommands(agent, role, deployment, rootDir))
 
-  // --- Role playbook (if no SOUL.md/AGENTS.md in workspace) ---
+  // --- Memory: REFERENCE only, don't inline (harness-agnostic) ---
+  if (isPersistent) {
+    const today = new Date().toISOString().slice(0, 10)
+    const memoryRef = [
+      `# Startup — Read These Files`,
+      `On session start, read these files for current state:`,
+      `- ${path.join(workspaceDir, "MEMORY.md")} — durable memory`,
+      `- ${path.join(workspaceDir, "memory", today + ".md")} — today's log`,
+    ]
+    const heartbeat = readWorkspaceFile(workspaceDir, "HEARTBEAT.md")
+    if (heartbeat) {
+      memoryRef.push(`- ${path.join(workspaceDir, "HEARTBEAT.md")} — periodic checklist`)
+    }
+    sections.push(memoryRef.join("\n"))
+  }
+
+  // --- Role playbook fallback (if no workspace files exist) ---
   if (!agentsFile) {
     const playbook = getPlaybook(role) || getPlaybook(agent)
     if (playbook) sections.push(playbook)

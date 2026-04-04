@@ -74,7 +74,7 @@ function buildSchedule() {
         log("Heartbeat — prompting orchestrator")
         try {
           run("node", [path.join(BIN, "send"), "--to-parent", "--sender", "cron", "--message",
-            "[HEARTBEAT] Hourly check. Review: tasks.md, agent health (node ~/openfleet/bin/ops agents), urgent deadlines, email (smart_mail 15). Log to heartbeat.log. Only post to Discord if something material changed."])
+            "[HEARTBEAT] Hourly check. Read ~/.openfleet/agents/cairn/HEARTBEAT.md for checklist. Quick: agent health (openfleet lifecycle status), active tasks (openfleet task list), Discord messages. Post to Discord only if something material changed."])
         } catch (e) {
           log(`Heartbeat failed: ${e.message}`)
         }
