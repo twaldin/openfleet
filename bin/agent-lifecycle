@@ -8,6 +8,12 @@ const { parseArgs } = require("../lib/opencode")
 const { loadRegistry, saveRegistry } = require("../core/runtime/registry")
 const { loadAgents, getAgent } = require("../core/runtime/agents")
 const { createEventStore } = require("../core/runtime/events")
+const {
+  buildRemoteTmuxHasSessionCommand,
+  getHost,
+  hostsFilePath,
+  runSshCommand,
+} = require("../core/remote/ssh")
 
 const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
 const BIN = __dirname
@@ -204,6 +210,20 @@ function showStatus() {
 }
 
 function isAlive(session) {
+  if (session.host && session.tmux_session && session.tmux_window) {
+    try {
+      const host = getHost(session.host, hostsFilePath(STATE_ROOT))
+      runSshCommand(host, buildRemoteTmuxHasSessionCommand({
+        tmuxSession: session.tmux_session,
+        windowName: session.tmux_window,
+      }), {
+        timeout: 5000,
+        stdio: "ignore",
+      })
+      return true
+    } catch {}
+  }
+
   // Primary check: does the agent have a live tmux window?
   if (session.tmux_session && session.tmux_window) {
     try {

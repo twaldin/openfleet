@@ -50,7 +50,7 @@ function enrich(meta, registry) {
   const host = meta.host || reg?.host || null
   const baseUrl = meta.baseUrl || reg?.baseUrl || null
   const transport = meta.transport || reg?.transport || null
-  const location = baseUrl ? "remote" : "local"
+  const location = baseUrl || (transport && transport.startsWith("ssh")) ? "remote" : "local"
   return {
     name: meta.name,
     agent_id: agentId,
