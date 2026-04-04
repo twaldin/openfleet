@@ -172,7 +172,7 @@ function formatDiscordMessage(channelName, author, content, attachmentPaths) {
   const replyCmd = channelId
     ? `node ${REMOTE_BIN} discord post --channel ${channelId} --message "<your reply>"`
     : `node ${REMOTE_BIN} discord post --channel ${channelName} --message "<your reply>"`
-  return `[Discord #${channelName}] ${author}: ${body}\n(Reply via Discord: ${replyCmd})`
+  return `[DISCORD #${channelName}] ${author}: ${body}\n(Reply via Discord: ${replyCmd})`
 }
 
 function sendToAgent(agentName, msg) {

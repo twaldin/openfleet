@@ -78,6 +78,7 @@ test("buildHarnessLaunchCommand builds remote opencode launch command", () => {
   assert.match(launch.command, /opencode serve --port/)
   assert.match(launch.command, /opencode attach http:\/\/127\.0\.0\.1:/)
   assert.match(launch.command, /openfleet\/workspaces\/ssh-coder/)
+  assert.match(launch.command, /OPENFLEET_AGENT_NAME='ssh-coder'/)
   assert.equal(typeof launch.opencodePort, "number")
 })
 

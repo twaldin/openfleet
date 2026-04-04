@@ -258,7 +258,7 @@ function capturePaneContent(agentName, cols) {
 function sendMessageToAgent(agentName, message) {
   try {
     execFileSync("node", [
-      path.join(BIN, "send"), agentName, message,
+      path.join(BIN, "send"), agentName, "--sender", "web-dashboard", "--message", message,
     ], { encoding: "utf8", timeout: 15000 })
     return { ok: true }
   } catch (e) {

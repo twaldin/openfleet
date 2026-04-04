@@ -30,7 +30,7 @@ async function main() {
   const message = args._.slice(1).join(" ").trim() || args.message || ""
 
   if (!target || !message) {
-    console.error("Usage: send <agent-name> <message>")
+    console.error("Usage: send <agent-name> --message \"text\" [--sender <name>]")
     console.error("       send --to-parent --sender <name> --message \"text\"")
     process.exit(1)
   }
@@ -52,7 +52,8 @@ async function main() {
     process.exit(1)
   }
 
-  const routed = await routeMessage(session, message, { targetName: target, stateRoot })
+  const fullMessage = applyMessageProvenance(message, { sender: args.sender })
+  const routed = await routeMessage(session, fullMessage, { targetName: target, stateRoot })
 
   if (routed.transport === "openclaw") {
     console.log(`Sent to ${target} via OpenClaw HTTP :${routed.port}`)
@@ -67,7 +68,7 @@ async function main() {
     type: "message.created",
     session_id: session.session_id,
     agent_id: target,
-    payload: { direction, text: message },
+    payload: { direction, text: fullMessage },
   })
 }
 
@@ -78,8 +79,8 @@ async function sendToParent(stateRoot, message, sender) {
     process.exit(1)
   }
 
-  const label = sender ? `[${sender.toUpperCase()}]: ` : ""
-  const fullMessage = `${label}${message}`
+  const fullMessage = applyMessageProvenance(message, { sender })
+  const resolvedSender = resolveSenderName({ sender })
 
   if (orchestrator.harness === "openclaw") {
     const port = orchestrator.openclaw_port || hashAgentPort(orchestrator.name || orchestrator.agent_id || "parent")
@@ -102,7 +103,7 @@ async function sendToParent(stateRoot, message, sender) {
 
   createEventStore(stateRoot).append({
     type: "message.created",
-    agent_id: sender || "unknown",
+    agent_id: (resolvedSender || "unknown").toLowerCase(),
     payload: { direction: "worker_to_parent", text: fullMessage },
   })
 
@@ -206,6 +207,60 @@ function hasTmuxWindow(session, window) {
   } catch { return false }
 }
 
+function applyMessageProvenance(message, options = {}) {
+  const text = String(message || "")
+  if (hasSourcePrefix(text)) {
+    return text
+  }
+
+  const sender = resolveSenderName(options)
+  return `[${sender.toUpperCase()}] ${text}`
+}
+
+function hasSourcePrefix(message) {
+  return /^\[[^\]\n]+\]\s/.test(message)
+}
+
+function resolveSenderName({ sender, env = process.env, execFileSyncImpl = execFileSync } = {}) {
+  if (sender) {
+    return sender
+  }
+
+  if (env.OPENFLEET_AGENT_NAME) {
+    return env.OPENFLEET_AGENT_NAME
+  }
+
+  if (env.AGENT_NAME) {
+    return env.AGENT_NAME
+  }
+
+  const tmuxWindow = resolveTmuxWindowName({ env, execFileSyncImpl })
+  if (tmuxWindow) {
+    return tmuxWindow
+  }
+
+  return "UNKNOWN"
+}
+
+function resolveTmuxWindowName({ env = process.env, execFileSyncImpl = execFileSync } = {}) {
+  if (!env.TMUX && !env.TMUX_PANE) {
+    return null
+  }
+
+  const args = ["display-message", "-p"]
+  if (env.TMUX_PANE) {
+    args.push("-t", env.TMUX_PANE)
+  }
+  args.push("#{window_name}")
+
+  try {
+    const output = execFileSyncImpl("tmux", args, { encoding: "utf8", stdio: "pipe" }).trim()
+    return output || null
+  } catch {
+    return null
+  }
+}
+
 if (require.main === module) {
   main().catch((e) => {
     console.error(e.message)
@@ -214,10 +269,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  applyMessageProvenance,
   findAgentSession,
   hasTmuxWindow,
+  hasSourcePrefix,
   isParentTarget,
   main,
   routeMessage,
+  resolveSenderName,
+  resolveTmuxWindowName,
   sendToParent,
 }

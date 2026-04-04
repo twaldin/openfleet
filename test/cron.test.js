@@ -5,7 +5,7 @@ const os = require("node:os")
 const path = require("node:path")
 
 const { createTask } = require("../core/runtime/tasks")
-const { evaluateCondition, shouldFire } = require("../bin/cron")
+const { evaluateCondition, executeJob, shouldFire } = require("../bin/cron")
 
 function tempStateDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openfleet-cron-"))
@@ -67,4 +67,50 @@ test("shouldFire combines schedule timing with condition evaluation", () => {
     shouldFire(job, now, { "work-loop": "2026-04-04T11:59:00.000Z" }, { stateRoot: stateDir }),
     false,
   )
+})
+
+test("executeJob sends cron provenance when routing to the parent", () => {
+  const calls = []
+
+  executeJob({ id: "status", target: "parent", prompt: "Summarize" }, {
+    binDir: "/tmp/openfleet/bin",
+    runImpl(cmd, args) {
+      calls.push({ cmd, args })
+    },
+  })
+
+  assert.deepEqual(calls, [{
+    cmd: "node",
+    args: [
+      "/tmp/openfleet/bin/send",
+      "--to-parent",
+      "--sender",
+      "cron",
+      "--message",
+      "Summarize",
+    ],
+  }])
+})
+
+test("executeJob sends cron provenance when routing directly to an agent", () => {
+  const calls = []
+
+  executeJob({ id: "status", target: "coder", prompt: "Summarize" }, {
+    binDir: "/tmp/openfleet/bin",
+    runImpl(cmd, args) {
+      calls.push({ cmd, args })
+    },
+  })
+
+  assert.deepEqual(calls, [{
+    cmd: "node",
+    args: [
+      "/tmp/openfleet/bin/send",
+      "coder",
+      "--sender",
+      "cron",
+      "--message",
+      "Summarize",
+    ],
+  }])
 })
