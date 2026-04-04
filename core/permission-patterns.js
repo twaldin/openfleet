@@ -21,7 +21,7 @@ const PERMISSION_PATTERNS = [
     label: "permission",
     matchers: [/Do you trust(?: this project| the contents of)?/i, /trust once/i, /(?:trust always|once\/always)/i],
     approveSequence: ["1"],
-    denySequence: ["3"],
+    denySequence: ["2"],
   },
   {
     id: "generic",

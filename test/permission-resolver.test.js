@@ -6,6 +6,7 @@ const {
   evaluateSafety,
   approveViaKeys,
   buildEscalationMessage,
+  denyViaKeys,
 } = require("../core/permission-resolver")
 const { DEFAULT_APPROVE_SEQUENCE, DEFAULT_DENY_SEQUENCE, PERMISSION_PATTERNS } = require("../core/permission-patterns")
 
@@ -25,7 +26,7 @@ test("permission patterns define harness-specific key sequences", () => {
   assert.deepEqual(byId["claude-code"].approveSequence, DEFAULT_APPROVE_SEQUENCE)
   assert.deepEqual(byId["claude-code"].denySequence, DEFAULT_DENY_SEQUENCE)
   assert.deepEqual(byId.codex.approveSequence, ["1"])
-  assert.deepEqual(byId.codex.denySequence, ["3"])
+  assert.deepEqual(byId.codex.denySequence, ["2"])
 })
 
 test("parsePermissionPrompt detects OpenCode permission prompts and extracts the requested path", () => {
@@ -86,7 +87,7 @@ test("parsePermissionPrompt detects Codex prompts from the shared pattern config
   assert.equal(result.patternId, "codex")
   assert.equal(result.path, "/private/tmp/openfleet-wt-coder-123")
   assert.deepEqual(result.approveSequence, ["1"])
-  assert.deepEqual(result.denySequence, ["3"])
+  assert.deepEqual(result.denySequence, ["2"])
 })
 
 test("parsePermissionPrompt detects Codex trust-this-project prompt variants", () => {
@@ -164,6 +165,20 @@ test("approveViaKeys sends the Codex numbered trust option", () => {
 
   assert.deepEqual(calls.map((call) => [call.file, ...call.args]), [
     ["tmux", "send-keys", "-t", "openfleet:codex-coder", "1"],
+  ])
+})
+
+test("denyViaKeys sends the Codex numbered reject option", () => {
+  const calls = []
+
+  denyViaKeys("openfleet", "codex-coder", ["2"], {
+    exec(file, args, options) {
+      calls.push({ file, args, options })
+    },
+  })
+
+  assert.deepEqual(calls.map((call) => [call.file, ...call.args]), [
+    ["tmux", "send-keys", "-t", "openfleet:codex-coder", "2"],
   ])
 })
 
