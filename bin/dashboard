@@ -367,7 +367,7 @@ const server = http.createServer(async (req, res) => {
     // API: capture agent pane
     const paneMatch = pathname.match(/^\/api\/agents\/([^/]+)\/pane$/)
     if (paneMatch && req.method === "GET") {
-      const cols = parseInt(url.searchParams?.get("cols") || parsedUrl.query?.cols || "120")
+      const cols = parseInt(url.searchParams?.get("cols") || "120")
       const result = capturePaneContent(decodeURIComponent(paneMatch[1]), cols)
       if (result.error) return text(res, result.content || "", result.content ? 200 : 404)
       return text(res, result.content)
