@@ -5,6 +5,7 @@ const { execFileSync } = require("child_process")
 const fs = require("fs")
 const os = require("os")
 const path = require("path")
+const { listTasks } = require("../core/runtime/tasks")
 
 const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
 const CRON_CONFIG = path.join(STATE_ROOT, "cron.json")
@@ -28,7 +29,12 @@ function saveCronState(state) {
   fs.writeFileSync(CRON_STATE, JSON.stringify(state, null, 2))
 }
 
-function shouldFire(job, now, state) {
+function shouldFire(job, now, state, options = {}) {
+  const stateRoot = options.stateRoot || STATE_ROOT
+  if (!evaluateCondition(job.condition, { stateRoot })) {
+    return false
+  }
+
   const lastFired = state[job.id] ? new Date(state[job.id]).getTime() : 0
   const sched = job.schedule || {}
 
@@ -49,6 +55,21 @@ function shouldFire(job, now, state) {
   }
 
   return false
+}
+
+function evaluateCondition(condition, { stateRoot }) {
+  if (!condition) return true
+
+  const type = typeof condition === "string" ? condition : condition.type
+  if (type === "idle_open_tasks") {
+    const tasks = listTasks(stateRoot)
+    if (tasks.some((task) => task.status === "in_progress")) {
+      return false
+    }
+    return tasks.some((task) => task.status === "open")
+  }
+
+  throw new Error(`Unknown cron condition type: ${type || "<missing>"}`)
 }
 
 function executeJob(job) {
@@ -75,13 +96,13 @@ function tick() {
   const config = loadConfig()
 
   for (const job of config.jobs || []) {
-    if (shouldFire(job, now, state)) {
-      try {
+    try {
+      if (shouldFire(job, now, state)) {
         executeJob(job)
         state[job.id] = now.toISOString()
-      } catch (e) {
-        log(`Cron ${job.id} failed: ${e.message}`)
       }
+    } catch (e) {
+      log(`Cron ${job.id} failed: ${e.message}`)
     }
   }
 
@@ -109,25 +130,38 @@ function log(msg) {
 
 const args = process.argv.slice(2)
 
-if (args.includes("--list")) {
-  const state = loadCronState()
-  const config = loadConfig()
-  for (const job of config.jobs || []) {
-    const last = state[job.id] || "never"
-    const sched = formatSchedule(job.schedule)
-    console.log(`${job.id.padEnd(25)} ${sched.padEnd(15)} → ${(job.target || "?").padEnd(15)} last: ${last}`)
+if (require.main === module) {
+  if (args.includes("--list")) {
+    const state = loadCronState()
+    const config = loadConfig()
+    for (const job of config.jobs || []) {
+      const last = state[job.id] || "never"
+      const sched = formatSchedule(job.schedule)
+      console.log(`${job.id.padEnd(25)} ${sched.padEnd(15)} → ${(job.target || "?").padEnd(15)} last: ${last}`)
+    }
+    process.exit(0)
   }
-  process.exit(0)
-}
 
-if (args.includes("--once")) {
+  if (args.includes("--once")) {
+    tick()
+    process.exit(0)
+  }
+
+  log("Cron scheduler started — reading from " + CRON_CONFIG)
   tick()
-  process.exit(0)
+  setInterval(tick, 60_000)
+
+  process.on("SIGINT", () => process.exit(0))
+  process.on("SIGTERM", () => process.exit(0))
 }
 
-log("Cron scheduler started — reading from " + CRON_CONFIG)
-tick()
-setInterval(tick, 60_000)
-
-process.on("SIGINT", () => process.exit(0))
-process.on("SIGTERM", () => process.exit(0))
+module.exports = {
+  evaluateCondition,
+  executeJob,
+  formatSchedule,
+  loadConfig,
+  loadCronState,
+  saveCronState,
+  shouldFire,
+  tick,
+}

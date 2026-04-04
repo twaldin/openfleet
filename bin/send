@@ -5,7 +5,7 @@ const os = require("os")
 const path = require("path")
 const fs = require("fs")
 const { parseArgs } = require("../lib/opencode")
-const { loadRegistry, saveRegistry, upsertSession } = require("../core/runtime/registry")
+const { loadRegistry } = require("../core/runtime/registry")
 const { loadActiveOrchestrator } = require("../core/runtime/orchestrator")
 const { createEventStore } = require("../core/runtime/events")
 
@@ -34,6 +34,11 @@ function main() {
   }
 
   // Look up agent in registry
+  const orchestrator = loadActiveOrchestrator(stateRoot)
+  if (isParentTarget(target, orchestrator)) {
+    return sendToParent(stateRoot, message, args.sender)
+  }
+
   const registry = loadRegistry(stateRoot)
   const session = findAgentSession(registry, target)
 
@@ -104,6 +109,14 @@ function sendToParent(stateRoot, message, sender) {
   console.log(`Sent to parent (${orchestrator.harness})`)
 }
 
+function isParentTarget(target, orchestrator) {
+  if (target === "parent" || target === "orchestrator") {
+    return true
+  }
+
+  return Boolean(orchestrator?.tmux_window && target === orchestrator.tmux_window)
+}
+
 function findAgentSession(registry, name) {
   // First try by name
   for (const session of Object.values(registry.sessions)) {
@@ -158,9 +171,19 @@ function hasTmuxWindow(session, window) {
   } catch { return false }
 }
 
-try {
-  main()
-} catch (e) {
-  console.error(e.message)
-  process.exit(1)
+if (require.main === module) {
+  try {
+    main()
+  } catch (e) {
+    console.error(e.message)
+    process.exit(1)
+  }
+}
+
+module.exports = {
+  findAgentSession,
+  hasTmuxWindow,
+  isParentTarget,
+  main,
+  sendToParent,
 }
