@@ -78,6 +78,14 @@ function respawnDormant(args) {
 
     console.log(`Respawning ${name} (${harness}/${model})...`)
 
+    // Re-project instructions before spawning (ensures harness-native files are current)
+    try {
+      const { projectInstructions } = require("../core/instructions")
+      projectInstructions(name, agent.role || name, harness, resolvedDir, null)
+    } catch (e) {
+      console.error(`${name}: instruction projection failed — ${e.message}`)
+    }
+
     // Build bootstrap prompt from workspace files
     const soulFile = path.join(resolvedDir, "SOUL.md")
     const stateFile = path.join(resolvedDir, "state.md")
