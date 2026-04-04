@@ -1,0 +1,38 @@
+#!/usr/bin/env node
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const { ensureAuthToken, rotateAuthToken } = require("../core/remote/config")
+
+const args = parseArgs(process.argv.slice(2))
+const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const command = args._[0]
+
+if (!command || args.help || args.h) {
+  console.log(`openfleet auth — dashboard token management
+
+USAGE
+  auth <show-token|rotate|qr> [--state-root <path>]
+
+COMMANDS
+  show-token   Print the current dashboard auth token
+  rotate       Generate and persist a new dashboard auth token
+  qr           Print the dashboard auth token for manual entry
+`)
+  process.exit(command ? 0 : 1)
+}
+
+switch (command) {
+  case "show-token":
+    console.log(ensureAuthToken(stateRoot))
+    break
+  case "rotate":
+    console.log(rotateAuthToken(stateRoot))
+    break
+  case "qr":
+    console.log(ensureAuthToken(stateRoot))
+    break
+  default:
+    console.error(`Unknown auth command: ${command}`)
+    process.exit(1)
+}

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // OpenFleet Dashboard — web UI for fleet monitoring and control
 const http = require("http")
+const crypto = require("crypto")
 const fs = require("fs")
 const os = require("os")
 const path = require("path")
 const { execFileSync } = require("child_process")
 const { parseArgs } = require("../lib/opencode")
+const { ensureAuthToken } = require("../core/remote/config")
 const { loadAgents } = require("../core/runtime/agents")
 const { loadRegistry } = require("../core/runtime/registry")
 const { loadTasks, listTasks } = require("../core/runtime/tasks")
@@ -38,6 +40,7 @@ const BIN = __dirname
 const CORE = path.join(__dirname, "..", "core")
 const NODE_MODULES = path.join(__dirname, "..", "node_modules")
 const START_TIME = Date.now()
+const SSE_INTERVAL_MS = Number(process.env.OPENFLEET_DASHBOARD_SSE_INTERVAL_MS || 5000)
 
 // --- Liveness check (same pattern as agent-lifecycle) ---
 
@@ -264,23 +267,48 @@ function spawnAgent(body) {
 
 // --- SSE ---
 
-const sseClients = new Set()
+const sseClients = new Map()
+
+function tokensEqual(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string") return false
+
+  const providedBuffer = Buffer.from(provided)
+  const expectedBuffer = Buffer.from(expected)
+  if (providedBuffer.length !== expectedBuffer.length) return false
+
+  return crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+}
+
+function closeSSEClient(res) {
+  sseClients.delete(res)
+  try { res.end() } catch {}
+}
+
+function pruneUnauthorizedSSEClients() {
+  const expectedToken = ensureAuthToken(STATE_ROOT)
+  for (const [res, token] of sseClients.entries()) {
+    if (!tokensEqual(token, expectedToken)) {
+      closeSSEClient(res)
+    }
+  }
+}
 
 function broadcastSSE(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
-  for (const res of sseClients) {
-    try { res.write(msg) } catch { sseClients.delete(res) }
+  for (const res of sseClients.keys()) {
+    try { res.write(msg) } catch { closeSSEClient(res) }
   }
 }
 
 // Push status + events every 5 seconds
 setInterval(() => {
+  pruneUnauthorizedSSEClients()
   if (sseClients.size === 0) return
   try {
     broadcastSSE("status", getFleetStatus())
     broadcastSSE("events", getEventsData())
   } catch {}
-}, 5000)
+}, SSE_INTERVAL_MS)
 
 // --- HTTP Server ---
 
@@ -312,6 +340,27 @@ function text(res, data, status = 200) {
   res.end(data)
 }
 
+function unauthorized(res) {
+  return json(res, { error: "Unauthorized" }, 401)
+}
+
+function readBearerToken(req) {
+  const header = req.headers.authorization || ""
+  const match = header.match(/^Bearer\s+(.+)$/i)
+  return match ? match[1].trim() : null
+}
+
+function isAuthorizedDashboardRequest(req, url) {
+  const expectedToken = ensureAuthToken(STATE_ROOT)
+  if (!expectedToken) return false
+
+  if (url.pathname === "/api/stream") {
+    return tokensEqual(url.searchParams.get("token"), expectedToken)
+  }
+
+  return tokensEqual(readBearerToken(req), expectedToken)
+}
+
 const MIME = {
   ".html": "text/html",
   ".css": "text/css",
@@ -319,6 +368,8 @@ const MIME = {
   ".json": "application/json",
   ".map": "application/json",
 }
+
+ensureAuthToken(STATE_ROOT)
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
@@ -329,12 +380,16 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
     })
     return res.end()
   }
 
   try {
+    if (pathname.startsWith("/api/") && !isAuthorizedDashboardRequest(req, url)) {
+      return unauthorized(res)
+    }
+
     // --- Routes ---
 
     // Root -> dashboard.html
@@ -405,7 +460,7 @@ const server = http.createServer(async (req, res) => {
         "Access-Control-Allow-Origin": "*",
       })
       res.write(`event: status\ndata: ${JSON.stringify(getFleetStatus())}\n\n`)
-      sseClients.add(res)
+      sseClients.set(res, url.searchParams.get("token"))
       req.on("close", () => sseClients.delete(res))
       return
     }

@@ -1,6 +1,7 @@
 const fs = require("fs")
 const path = require("path")
 const os = require("os")
+const crypto = require("crypto")
 
 function defaultStateRoot() {
   return process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
@@ -18,6 +19,51 @@ function loadRemoteConfig(stateRoot) {
     if (error && error.code === "ENOENT") return null
     throw new Error(`Failed to load remote config at ${configPath}: ${error.message}`)
   }
+}
+
+function saveRemoteConfig(stateRoot, config) {
+  const configPath = remoteConfigPath(stateRoot)
+  fs.mkdirSync(path.dirname(configPath), { recursive: true })
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  return config
+}
+
+function generateAuthToken() {
+  return crypto.randomBytes(32).toString("hex")
+}
+
+function ensureAuthToken(stateRoot) {
+  const config = loadRemoteConfig(stateRoot) || {}
+  if (config.auth?.token) {
+    return config.auth.token
+  }
+
+  const token = generateAuthToken()
+  saveRemoteConfig(stateRoot, {
+    ...config,
+    auth: {
+      ...(config.auth || {}),
+      token,
+    },
+  })
+  return token
+}
+
+function getAuthToken(stateRoot) {
+  return loadRemoteConfig(stateRoot)?.auth?.token || null
+}
+
+function rotateAuthToken(stateRoot) {
+  const config = loadRemoteConfig(stateRoot) || {}
+  const token = generateAuthToken()
+  saveRemoteConfig(stateRoot, {
+    ...config,
+    auth: {
+      ...(config.auth || {}),
+      token,
+    },
+  })
+  return token
 }
 
 function resolveProvider(config) {
@@ -55,10 +101,15 @@ function resolveCaptureConfig(config, agentName) {
 }
 
 module.exports = {
+  ensureAuthToken,
   defaultStateRoot,
+  generateAuthToken,
+  getAuthToken,
   loadRemoteConfig,
   remoteConfigPath,
+  rotateAuthToken,
   resolveCaptureConfig,
   resolveEventRouting,
   resolveProvider,
+  saveRemoteConfig,
 }
