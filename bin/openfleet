@@ -34,6 +34,7 @@ const commands = {
   post: (args) => run("post", args),
   remote: (args) => run("remote", args),
   discord: (args) => run("remote", ["discord", ...args]),
+  auth: (args) => run("auth", args),
 
   // Profiles
   profile: (args) => run("profile", args),
@@ -105,6 +106,7 @@ COMMUNICATION
   post <message>              Post to your remote channel (provider-agnostic)
   remote [args]               Remote operations
   discord <subcommand>        Discord operations (post, summary, etc.)
+  auth <subcommand>           Dashboard auth token management
 
 PROFILES
   profile <subcmd>    Runtime profile management

@@ -464,6 +464,86 @@ html, body {
   color: var(--text-dim);
 }
 
+/* Login overlay */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(1, 4, 9, 0.86);
+  backdrop-filter: blur(8px);
+  z-index: 200;
+}
+
+.login-overlay.open { display: flex; }
+
+.login-panel {
+  width: 420px;
+  max-width: 100%;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.login-panel h2 {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.login-panel p {
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.login-panel label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.login-panel input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+}
+
+.login-panel input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.login-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.login-error {
+  min-height: 18px;
+  margin-top: 10px;
+  color: var(--red);
+  font-size: 11px;
+}
+
+.login-help {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 /* Spawn modal */
 .modal-overlay {
   display: none;
@@ -610,6 +690,20 @@ html, body {
 
 </div>
 
+<div class="login-overlay" id="login-overlay">
+  <div class="login-panel">
+    <h2>Dashboard Login</h2>
+    <p>Enter the OpenFleet dashboard token from <code>openfleet auth show-token</code>.</p>
+    <label for="login-token">Bearer Token</label>
+    <input type="password" id="login-token" placeholder="64-char dashboard token" autocomplete="off" spellcheck="false">
+    <div class="login-error" id="login-error"></div>
+    <div class="login-actions">
+      <button class="btn primary" id="login-submit">Unlock Dashboard</button>
+    </div>
+    <div class="login-help">Stored locally in this browser via <code>localStorage</code>.</div>
+  </div>
+</div>
+
 <!-- Spawn modal -->
 <div class="modal-overlay" id="spawn-modal">
   <div class="modal">
@@ -640,9 +734,12 @@ html, body {
   "use strict";
 
   // --- State ---
+  const TOKEN_STORAGE_KEY = "openfleet.dashboard.token";
   let selectedAgent = null;
   let paneRefreshTimer = null;
   let agents = [];
+  let authToken = loadStoredToken();
+  let streamSource = null;
 
   // --- DOM refs ---
   const $agentList = document.getElementById("agent-list");
@@ -659,6 +756,112 @@ html, body {
   const $fleetCount = document.getElementById("fleet-count");
   const $uptime = document.getElementById("uptime");
   const $spawnModal = document.getElementById("spawn-modal");
+  const $loginOverlay = document.getElementById("login-overlay");
+  const $loginToken = document.getElementById("login-token");
+  const $loginError = document.getElementById("login-error");
+  const $loginSubmit = document.getElementById("login-submit");
+
+  // --- Auth ---
+
+  function loadStoredToken() {
+    try {
+      return localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function setStoredToken(token) {
+    authToken = (token || "").trim();
+    try {
+      if (authToken) localStorage.setItem(TOKEN_STORAGE_KEY, authToken);
+      else localStorage.removeItem(TOKEN_STORAGE_KEY);
+    } catch {}
+  }
+
+  function openLogin(message) {
+    if (streamSource) {
+      streamSource.close();
+      streamSource = null;
+    }
+    if (paneRefreshTimer) {
+      clearInterval(paneRefreshTimer);
+      paneRefreshTimer = null;
+    }
+    $loginOverlay.classList.add("open");
+    $loginError.textContent = message || "";
+    $loginToken.value = authToken;
+    setTimeout(function() { $loginToken.focus(); }, 0);
+  }
+
+  function closeLogin() {
+    $loginOverlay.classList.remove("open");
+    $loginError.textContent = "";
+  }
+
+  function authHeaders(headers) {
+    return Object.assign({}, headers || {}, authToken ? { Authorization: "Bearer " + authToken } : {});
+  }
+
+  async function apiFetch(url, options) {
+    const response = await fetch(url, Object.assign({}, options || {}, {
+      headers: authHeaders(options && options.headers),
+    }));
+
+    if (response.status === 401) {
+      setStoredToken("");
+      openLogin("Token rejected. Enter the current dashboard token.");
+      throw new Error("Unauthorized");
+    }
+
+    return response;
+  }
+
+  async function apiFetchJson(url, options) {
+    const response = await apiFetch(url, options);
+    return response.json();
+  }
+
+  async function apiFetchText(url, options) {
+    const response = await apiFetch(url, options);
+    return response.text();
+  }
+
+  async function verifyToken(token) {
+    const response = await fetch("/api/status", {
+      headers: token ? { Authorization: "Bearer " + token } : {},
+    });
+    if (response.status === 401) return false;
+    if (!response.ok) throw new Error("Dashboard auth check failed");
+    return true;
+  }
+
+  async function submitLogin() {
+    const token = $loginToken.value.trim();
+    if (!token) {
+      openLogin("Enter a dashboard token.");
+      return;
+    }
+
+    $loginSubmit.disabled = true;
+    $loginError.textContent = "Checking token...";
+    try {
+      const ok = await verifyToken(token);
+      if (!ok) {
+        $loginError.textContent = "Invalid token.";
+        return;
+      }
+
+      setStoredToken(token);
+      closeLogin();
+      await fetchAll();
+      connectSSE();
+    } catch {
+      $loginError.textContent = "Unable to reach dashboard.";
+    } finally {
+      $loginSubmit.disabled = false;
+    }
+  }
 
   // --- ANSI parser ---
   const ANSI_COLORS = [
@@ -867,7 +1070,7 @@ html, body {
     if (!keyFlushTimer) {
       keyFlushTimer = setTimeout(function() {
         if (keyBuffer && selectedAgent) {
-          fetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/keys", {
+          apiFetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/keys", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ keys: keyBuffer }),
@@ -885,8 +1088,7 @@ html, body {
   function refreshPane() {
     if (!selectedAgent) return;
     var hadFocus = document.activeElement === $paneViewer;
-    fetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/pane")
-      .then(function(r) { return r.text(); })
+    apiFetchText("/api/agents/" + encodeURIComponent(selectedAgent) + "/pane")
       .then(function(text) {
         if (!text.trim()) {
           $paneViewer.innerHTML = "";
@@ -917,12 +1119,11 @@ html, body {
     $msgInput.value = "";
     $msgSend.disabled = true;
 
-    fetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/send", {
+    apiFetchJson("/api/agents/" + encodeURIComponent(selectedAgent) + "/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: msg }),
     })
-      .then(function(r) { return r.json(); })
       .then(function(data) {
         $msgSend.disabled = false;
         if (!data.ok) {
@@ -971,12 +1172,11 @@ html, body {
 
     document.getElementById("spawn-confirm").disabled = true;
 
-    fetch("/api/agents/spawn", {
+    apiFetchJson("/api/agents/spawn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     })
-      .then(function(r) { return r.json(); })
       .then(function(data) {
         document.getElementById("spawn-confirm").disabled = false;
         $spawnModal.classList.remove("open");
@@ -997,7 +1197,10 @@ html, body {
   // --- SSE ---
 
   function connectSSE() {
-    var source = new EventSource("/api/stream");
+    if (!authToken) return;
+    if (streamSource) streamSource.close();
+    var source = new EventSource("/api/stream?token=" + encodeURIComponent(authToken));
+    streamSource = source;
 
     source.addEventListener("status", function(e) {
       try {
@@ -1012,47 +1215,42 @@ html, body {
         renderEvents(JSON.parse(e.data));
       } catch {}
     });
-
+    
     source.onerror = function() {
       source.close();
+      if (streamSource === source) streamSource = null;
       $fleetStatus.innerHTML = '<span class="status-dot dead"></span>Disconnected';
       // Reconnect after 5s
-      setTimeout(connectSSE, 5000);
+      if (!$loginOverlay.classList.contains("open")) setTimeout(connectSSE, 5000);
     };
   }
 
   // --- Initial data fetch ---
 
   function fetchAll() {
-    fetch("/api/status")
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
+    if (!authToken) return Promise.resolve();
+    return Promise.all([
+      apiFetchJson("/api/status").then(function(data) {
         renderAgents(data.agents || []);
         renderStatus(data);
-      })
-      .catch(function() {});
-
-    fetch("/api/tasks")
-      .then(function(r) { return r.json(); })
-      .then(function(data) { renderTasks(data); })
-      .catch(function() {});
-
-    fetch("/api/events")
-      .then(function(r) { return r.json(); })
-      .then(function(data) { renderEvents(data); })
-      .catch(function() {});
-
-    fetch("/api/cron")
-      .then(function(r) { return r.json(); })
-      .then(function(data) { renderCron(data); })
-      .catch(function() {});
+      }),
+      apiFetchJson("/api/tasks").then(function(data) { renderTasks(data); }),
+      apiFetchJson("/api/events").then(function(data) { renderEvents(data); }),
+      apiFetchJson("/api/cron").then(function(data) { renderCron(data); }),
+    ]).catch(function() {});
   }
 
   // Refresh tasks/cron periodically (they don't come via SSE)
   setInterval(function() {
-    fetch("/api/tasks").then(function(r) { return r.json(); }).then(renderTasks).catch(function() {});
-    fetch("/api/cron").then(function(r) { return r.json(); }).then(renderCron).catch(function() {});
+    if (!authToken) return;
+    apiFetchJson("/api/tasks").then(renderTasks).catch(function() {});
+    apiFetchJson("/api/cron").then(renderCron).catch(function() {});
   }, 10000);
+
+  $loginSubmit.addEventListener("click", submitLogin);
+  $loginToken.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") submitLogin();
+  });
 
   // --- Utilities ---
 
@@ -1084,8 +1282,24 @@ html, body {
   }
 
   // --- Boot ---
-  fetchAll();
-  connectSSE();
+  if (authToken) {
+    verifyToken(authToken)
+      .then(function(ok) {
+        if (!ok) {
+          setStoredToken("");
+          openLogin("Stored token rejected. Enter the current dashboard token.");
+          return;
+        }
+        closeLogin();
+        fetchAll();
+        connectSSE();
+      })
+      .catch(function() {
+        openLogin("Unable to reach dashboard.");
+      });
+  } else {
+    openLogin();
+  }
 
 })();
 </script>
