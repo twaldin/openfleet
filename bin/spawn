@@ -67,9 +67,10 @@ function main() {
       launchCmd = `codex -m ${model} -C ${workdir} --full-auto`
       break
     case "opencode":
-      // Headless server — deterministic port from agent name hash
+      // Headless server + TUI attached to it
+      // serve runs in background, attach gives live TUI in the tmux pane
       opencodePort = 14000 + Math.abs([...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0) % 1000)
-      launchCmd = `opencode serve --port ${opencodePort} --print-logs`
+      launchCmd = `opencode serve --port ${opencodePort} & sleep 3 && opencode attach http://127.0.0.1:${opencodePort} --dir ${workdir}`
       break
     default:
       console.error(`Unknown harness: ${harness}`)
