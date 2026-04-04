@@ -4,42 +4,48 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const { createJob } = require('../core/runtime/jobs')
-const { createWorkflow, pauseWorkflow } = require('../core/runtime/workflows')
-const { createBlocker } = require('../core/runtime/blockers')
-const { createApproval } = require('../core/runtime/approvals')
+const { createTask } = require('../core/runtime/tasks')
 const { decideContinuation } = require('../core/continuation')
 
 function tempStateDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'openfleet-continuation-'))
 }
 
-test('continuation says continue when runnable jobs exist', () => {
+test('continuation says continue when open tasks exist', () => {
   const stateDir = tempStateDir()
-  createJob(stateDir, { type: 'coder.fix', status: 'queued', agent: 'coder' })
+  createTask(stateDir, { title: 'Fix bug', status: 'open', assignee: 'coder' })
   const result = decideContinuation(stateDir, { source: 'cairn' })
   assert.equal(result.decision, 'continue')
-  assert.equal(result.reason, 'runnable_jobs_exist')
+  assert.equal(result.reason, 'open_tasks_exist')
+  assert.equal(result.counts.open_tasks, 1)
 })
 
-test('continuation says wait when blocked or approvals pending', () => {
+test('continuation says wait when tasks are blocked', () => {
   const stateDir = tempStateDir()
-  createWorkflow(stateDir, { type: 'remediation', status: 'blocked', steps: [] })
-  createBlocker(stateDir, { summary: 'Need answer', status: 'open', channel_binding: 'thread://x' })
-  createApproval(stateDir, { summary: 'Need approval', status: 'pending', channel_binding: 'thread://x' })
+  createTask(stateDir, { title: 'Need answer', status: 'blocked', blocked_on: 'waiting for repo' })
   const result = decideContinuation(stateDir, { source: 'cairn' })
   assert.equal(result.decision, 'wait')
-  assert.equal(result.reason, 'blocked_or_awaiting_approval')
+  assert.equal(result.reason, 'blocked_tasks_exist')
+  assert.equal(result.counts.blocked_tasks, 1)
 })
 
-test('continuation says wait when workflows are paused', () => {
+test('continuation says wait when tasks are already in progress', () => {
   const stateDir = tempStateDir()
-  const workflow = createWorkflow(stateDir, { type: 'remediation', status: 'active', steps: ['coder.fix'] })
-  pauseWorkflow(stateDir, workflow.id, { reason: 'manual pause' })
+  createTask(stateDir, { title: 'Implement fix', status: 'in_progress', assignee: 'coder' })
 
   const result = decideContinuation(stateDir, { source: 'cairn' })
 
   assert.equal(result.decision, 'wait')
-  assert.equal(result.reason, 'paused_workflows')
-  assert.equal(result.counts.paused_workflows, 1)
+  assert.equal(result.reason, 'work_in_progress')
+  assert.equal(result.counts.in_progress_tasks, 1)
+})
+
+test('continuation says stop when all tasks are complete', () => {
+  const stateDir = tempStateDir()
+  createTask(stateDir, { title: 'Done', status: 'completed' })
+
+  const result = decideContinuation(stateDir, { source: 'cairn' })
+
+  assert.equal(result.decision, 'stop')
+  assert.equal(result.reason, 'all_work_complete')
 })

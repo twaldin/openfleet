@@ -24,7 +24,7 @@ test("buildAgentInstructions includes OpenFleet commands and playbook for epheme
   assert.match(text, /node .*\/bin\/send --to-parent --sender test-coder/)
   assert.match(text, /openfleet post/)
   assert.match(text, /## Completion Protocol/)
-  assert.match(text, /## Blocker Protocol/)
+  assert.match(text, /## Blocked Task Protocol/)
   assert.match(text, /## Compaction Protocol/)
   // Should have playbook (no workspace files for this agent)
   assert.match(text, /CODER PLAYBOOK/)

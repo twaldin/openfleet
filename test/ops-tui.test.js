@@ -8,7 +8,6 @@ const { box, renderOpsTui } = require('../core/ops-tui')
 const { saveSessionMetadata } = require('../core/runtime/session')
 const { createJob } = require('../core/runtime/jobs')
 const { createTask } = require('../core/runtime/tasks')
-const { createBlocker } = require('../core/runtime/blockers')
 
 function tempStateDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'openfleet-ops-tui-'))
@@ -28,27 +27,26 @@ test('renderOpsTui builds a multi-panel human-facing dashboard', () => {
   })
   createJob(stateDir, { type: 'coder.fix', status: 'dispatched', agent: 'coder' })
   createJob(stateDir, { type: 'stock-monitor.check', status: 'queued', agent: 'stock-monitor', trigger: 'scheduler' })
-  createTask(stateDir, { title: 'Build ops TUI', status: 'active', assignee: 'coder' })
-  createBlocker(stateDir, { agent_id: 'coder', summary: 'Need approval', status: 'open' })
+  createTask(stateDir, { title: 'Build ops TUI', status: 'blocked', assignee: 'coder', blocked_on: 'Need approval' })
 
   const screen = renderOpsTui(stateDir, { width: 96 })
 
   assert.match(screen, /OpenFleet Ops/)
   assert.match(screen, /Agents/)
   assert.match(screen, /Tasks/)
-  assert.match(screen, /Jobs \/ Workflows/)
-  assert.match(screen, /Blockers \/ Approvals/)
+  assert.match(screen, /Jobs/)
+  assert.match(screen, /Task Status/)
   assert.match(screen, /scheduled: 1 \| loops: 1/)
   assert.match(screen, /coder \| coder-gpt@macbook \| working \| coder-gpt/)
   assert.match(screen, /Build ops TUI/)
-  assert.match(screen, /Build ops TUI \| owner=coder \| worker=coder/)
-  assert.match(screen, /blocker: coder \| Need approval/)
+  assert.match(screen, /status=blocked/)
+  assert.match(screen, /assignee=coder/)
 })
 
 test('box renders title bar on a single clean line', () => {
-  const lines = box('Jobs / Workflows', ['item'], 24)
+  const lines = box('Jobs', ['item'], 24)
 
-  assert.equal(lines[0], '┌─ Jobs / Workflows ───┐')
+  assert.equal(lines[0], '┌─ Jobs ───────────────┐')
   assert.equal(lines[1], '│ item                 │')
   assert.equal(lines[2], '└──────────────────────┘')
   assert.equal(lines.length, 3)

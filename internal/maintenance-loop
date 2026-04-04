@@ -19,7 +19,6 @@ function main() {
   const result = {
     decision,
     nudged: null,
-    backlogStarted: null,
     orchestratorPrompted: null,
     waitLatched: Boolean(maintenanceState.wait_latched),
   }
@@ -38,26 +37,22 @@ function main() {
   const ageMs = Date.now() - (Number.isNaN(lastAt) ? 0 : lastAt)
   const shouldPrompt = (
     !maintenanceState.wait_latched &&
-    (stalled.length > 0 || decision.decision === 'continue' || decision.reason === 'work_in_progress' || decision.reason === 'blocked_or_awaiting_approval') &&
+    (stalled.length > 0 || decision.decision === 'continue' || decision.reason === 'work_in_progress' || decision.reason === 'blocked_tasks_exist') &&
     (maintenanceState.last_nudge_key !== nudgeKey || ageMs > 90_000)
   )
 
   if (shouldPrompt) {
     const message = stalled.length
-      ? `[SYSTEM]: stalled job ${stalled[0].job.id} still has no completion/blocker. Resume the highest-value active work now, or create a blocker/report-completion if appropriate.`
+      ? `[SYSTEM]: stalled job ${stalled[0].job.id} still has no completion report. Resume the highest-value active work now, or report completion / mark the task blocked if appropriate.`
       : decision.reason === 'work_in_progress'
-        ? `[SYSTEM]: active workflow work is still in progress. Resume supervising the highest-value active task now, or create a blocker if progress is stuck.`
-      : decision.reason === 'blocked_or_awaiting_approval'
-        ? `[SYSTEM]: all remaining work is currently blocked or awaiting approval. Surface the real blockers clearly, or if you intentionally want silence, run: node ${path.resolve(__dirname, 'orchestrator-control')} wait`
-      : `[SYSTEM]: continuation policy says runnable work remains. Resume the highest-value active task now, or create a blocker if blocked.`
+        ? `[SYSTEM]: active task work is still in progress. Resume supervising the highest-value active task now, or mark it blocked if progress is stuck.`
+      : decision.reason === 'blocked_tasks_exist'
+        ? `[SYSTEM]: all remaining work is currently blocked. Surface the real blockers clearly, or if you intentionally want silence, run: node ${path.resolve(__dirname, 'orchestrator-control')} wait`
+      : `[SYSTEM]: continuation policy says open tasks remain. Resume the highest-value active task now, or mark it blocked if blocked.`
     result.orchestratorPrompted = JSON.parse(execFileSync('node', [path.resolve(__dirname, 'orchestrator'), 'send', '--message', message], { encoding: 'utf8' }))
     maintenanceState.last_nudge_at = new Date().toISOString()
     maintenanceState.last_nudge_key = nudgeKey
     fs.writeFileSync(maintenanceFile, `${JSON.stringify(maintenanceState, null, 2)}\n`)
-  }
-
-  if (decision.decision === 'wait' && decision.reason === 'no_runnable_work') {
-    result.backlogStarted = JSON.parse(execFileSync('node', [path.resolve(__dirname, 'backlog-runner')], { encoding: 'utf8' }))
   }
 
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)

@@ -18,19 +18,12 @@ function main() {
     postChannel: args.channel,
     postMessage: args.message,
     shouldIssue: Boolean(args.issue),
-    createWorkflow: args["workflow-type"] ? {
-      type: args["workflow-type"],
-      status: args["workflow-status"],
-      steps: parseJson(args["workflow-steps"]) || [],
-      context: parseJson(args["workflow-context"]) || {},
-    } : null,
     createJob: args["job-type"] ? {
       type: args["job-type"],
       status: args["job-status"],
       agent: args.agent,
       trigger: args.trigger,
       input: parseJson(args.input) || null,
-      workflowId: args["workflow-id"] || null,
     } : null,
     stateRoot,
   })

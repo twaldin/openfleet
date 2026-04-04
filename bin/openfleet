@@ -17,7 +17,6 @@ const commands = {
 
   // Task management
   task: (args) => run("task-state", args),
-  dispatch: (args) => run("dispatch", args),
   execute: (args) => run("execute", args),
   spawn: (args) => run("spawn", args),
   attach: (args) => run("attach", args),
@@ -60,7 +59,6 @@ const commands = {
 
   // Maintenance
   maintenance: (args) => run("maintenance-loop", args),
-  stalled: (args) => run("stalled-jobs", args),
   reconcile: (args) => run("reconcile-state", args),
 
   // Orchestrator
@@ -92,8 +90,7 @@ WEB
 
 TASKS
   task <subcommand>   Task lifecycle (create, list, update, etc.)
-  dispatch [args]     Dispatch a job to an agent
-  execute [args]      Execute a command or workflow
+  execute [args]      Execute a job
   spawn [args]        Spawn agents in any harness
   kill <name>         Kill tmux window openfleet:<name>
 
@@ -118,7 +115,6 @@ OPERATIONS
   bridge [args]       Start remote event bridge
   capture [args]      Start passive agent capture daemon
   maintenance [args]  Run maintenance loop
-  stalled [args]      Check for stalled jobs
   reconcile [args]    Reconcile fleet state
   orchestrator [args] Orchestrator controls
   events [args]       Tail event log

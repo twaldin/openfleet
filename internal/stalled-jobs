@@ -3,9 +3,6 @@
 const os = require('os')
 const path = require('path')
 const { execFileSync } = require('child_process')
-const { createBlocker, listBlockers } = require('../core/runtime/blockers')
-const { updateJob } = require('../core/runtime/jobs')
-const { createEventStore } = require('../core/runtime/events')
 const { parseArgs } = require('../lib/opencode')
 const { listStalledJobs } = require('../core/stalled')
 const { loadDeploymentConfig } = require('../core/deployment')
@@ -34,34 +31,12 @@ async function main() {
     const match = stalled.find((item) => item.job.id === id)
     if (!match) throw new Error(`No stalled job found for ${id}`)
 
-    const extracted = extractBlocker(match.lastAssistant?.text || '')
-    if (extracted) {
-      const existing = listBlockers(stateRoot).find((item) =>
-        item.status === 'open' &&
-        item.job_id === match.job.id &&
-        item.channel_binding === (match.job.input?.context?.channel_binding || null)
-      )
-      const blocker = existing || createBlocker(stateRoot, {
-        task_id: match.job.input?.context?.task_id || null,
-        job_id: match.job.id,
-        workflow_id: match.job.workflow_id || null,
-        agent_id: match.job.agent,
-        summary: extracted.summary,
-        question: extracted.question,
-        blocked_on_type: 'human',
-        blocked_on_id: 'user',
-        urgency: 'normal',
-        channel_binding: match.job.input?.context?.channel_binding || null,
-      })
-      updateJob(stateRoot, match.job.id, { status: 'blocked' })
-      createEventStore(stateRoot).append({ type: existing ? 'blocker.updated' : 'blocker.created', agent_id: blocker.agent_id || 'openfleet', payload: blocker })
-      process.stdout.write(JSON.stringify({ ok: true, blocked: match.job.id, blocker }, null, 2) + '\n')
-      return
-    }
-
     const sessionName = match.job.output?.execution?.session || match.metadata.name
-    const agentProfile = match.job.output?.execution?.agentProfile || match.metadata.agentProfile || match.job.agent
-    const prompt = `SYSTEM: Your latest turn appears finished, but job ${match.job.id} is still in progress. If the work is complete, call report-completion now. If you are blocked, create a blocker now. Otherwise continue the job immediately.`
+    const taskId = match.job.input?.task_id || match.job.input?.context?.task_id || null
+    const blockedHint = taskId
+      ? ` If you are blocked, run: node ${path.join(__dirname, '..', 'bin', 'task-state')} task update ${taskId} --status blocked --blocked-on "<reason>".`
+      : ''
+    const prompt = `SYSTEM: Your latest turn appears finished, but job ${match.job.id} is still in progress. If the work is complete, call report-completion now.${blockedHint} Otherwise continue the job immediately.`
     const sendBin = path.join(__dirname, '..', 'bin', 'send')
     execFileSync('node', [sendBin, sessionName, '--message', prompt], { encoding: 'utf8' })
     process.stdout.write(JSON.stringify({ ok: true, nudged: id, session: sessionName }, null, 2) + '\n')
@@ -70,32 +45,6 @@ async function main() {
 
   throw new Error('Usage: stalled-jobs [list|nudge <job-id>]')
 }
-
-function extractBlocker(text) {
-  try {
-    const parsed = JSON.parse(text)
-    if (parsed?.name === 'question') {
-      const q = parsed?.arguments?.questions?.[0]?.question
-      if (q) {
-        return { summary: 'Worker needs clarification', question: q }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  const trimmed = String(text || '').trim()
-  if (trimmed.startsWith('Blocked.')) {
-    const body = trimmed.replace(/^Blocked\.\s*/, '')
-    return {
-      summary: body.slice(0, 120) || 'Worker reported blocked state',
-      question: body || 'Worker reported blocked state and needs human intervention.',
-    }
-  }
-
-  return null
-}
-
 main().catch((error) => {
   console.error(error.message)
   process.exit(1)

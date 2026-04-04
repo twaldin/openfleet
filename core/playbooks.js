@@ -5,7 +5,7 @@ const PLAYBOOKS = {
     '- Prefer test-driven changes when practical: write or update a failing test first, then make it pass.',
     '- Do not over-engineer.',
     '- Keep communication direct and operational.',
-    '- If missing context blocks safe progress, surface a blocker instead of guessing.',
+    '- If missing context blocks safe progress, mark the task blocked instead of guessing.',
   ].join('\n'),
   evaluator: [
     'EVALUATOR PLAYBOOK',

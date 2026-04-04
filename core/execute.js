@@ -90,26 +90,27 @@ function executeControllerJob({ job, controller, args = [], controllerDir }) {
 function buildJobPrompt(job) {
   const input = job.input || {}
   const playbook = getPlaybook(job.agent)
-  const workflowId = job.workflow_id || 'none'
   const reportCompletionBin = path.resolve(__dirname, '../bin/report-completion')
   const taskStateBin = path.resolve(__dirname, '../bin/task-state')
+  const taskId = input?.task_id || input?.context?.task_id || null
   const completionHint = [
     'COMPLETION PROTOCOL',
-    `- When the job is actually complete, run: node ${reportCompletionBin} ${job.id} --summary "<one concise summary>" --continue --execute`,
+    `- When the job is actually complete, run: node ${reportCompletionBin} ${job.id} --summary "<one concise summary>"`,
     '- Use a short operational summary.',
     '- Do not claim completion until the requested work is genuinely done.',
   ].join('\n')
 
   const blockerHint = [
-    'BLOCKER PROTOCOL',
-    '- If you cannot proceed safely because context is missing, create a blocker instead of guessing.',
-    `- Use: node ${taskStateBin} blocker create --job ${job.id} --workflow ${workflowId} --agent ${job.agent} --summary "<short blocker summary>" --question "<what you need from the human>" --type human --channel "${input?.context?.channel_binding || ''}"`,
+    'BLOCKED TASK PROTOCOL',
+    '- If you cannot proceed safely because context is missing, mark the task blocked instead of guessing.',
+    taskId
+      ? `- Use: node ${taskStateBin} task update ${taskId} --status blocked --blocked-on "<what you need from the human>"`
+      : '- If no task is attached, send a parent update explaining the blocker.',
   ].join('\n')
   return [
     `OpenFleet job execution.`,
     `JOB_ID: ${job.id}`,
     `JOB_TYPE: ${job.type}`,
-    `WORKFLOW_ID: ${job.workflow_id || "none"}`,
     `You are executing a bounded job assigned to agent role \`${job.agent}\`.`,
     `Use the provided input as the source of truth.`,
     `When complete, return a concise structured response if asked, or complete the requested task directly.`,

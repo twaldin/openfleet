@@ -1,7 +1,7 @@
 const { createEventStore } = require("./runtime/events")
 const { runActions } = require("./actions")
 
-function runTaskPipeline({ taskId, source, payloadFile = null, summary = "", shouldPost = false, postChannel = null, postMessage = null, shouldIssue = false, createWorkflow = null, createJob = null, stateRoot }) {
+function runTaskPipeline({ taskId, source, payloadFile = null, summary = "", shouldPost = false, postChannel = null, postMessage = null, shouldIssue = false, createJob = null, stateRoot }) {
   const eventStore = createEventStore(stateRoot)
   eventStore.append({
     type: "task.completed",
@@ -21,23 +21,6 @@ function runTaskPipeline({ taskId, source, payloadFile = null, summary = "", sho
     },
   ]
 
-  let workflowId = createJob?.workflowId || null
-
-  if (createWorkflow) {
-    const [workflowAction] = runActions([
-      {
-        type: "workflow_create",
-        source,
-        workflowType: createWorkflow.type,
-        status: createWorkflow.status,
-        steps: createWorkflow.steps,
-        context: createWorkflow.context,
-      },
-    ], { source, payloadFile, summary, stateRoot })
-    actions.push(workflowAction)
-    workflowId = workflowAction?.workflow?.id || workflowId
-  }
-
   if (createJob) {
     const [jobAction] = runActions([
       {
@@ -48,9 +31,8 @@ function runTaskPipeline({ taskId, source, payloadFile = null, summary = "", sho
         agent: createJob.agent,
         trigger: createJob.trigger,
         input: createJob.input,
-        workflowId,
       },
-    ], { source, payloadFile, summary, stateRoot, workflowId })
+    ], { source, payloadFile, summary, stateRoot })
     actions.push(jobAction)
   }
 
@@ -71,14 +53,14 @@ function runTaskPipeline({ taskId, source, payloadFile = null, summary = "", sho
     })
   }
 
-  const baseActions = actions.filter((action) => !["workflow_create", "job_create"].includes(action.type))
+  const baseActions = actions.filter((action) => action.type !== "job_create")
   const baseRun = runActions(baseActions, { source, payloadFile, summary, stateRoot })
 
   return {
     ok: true,
     taskId,
     source,
-    actions: [...actions.filter((action) => ["workflow_create", "job_create"].includes(action.type)), ...baseRun],
+    actions: [...actions.filter((action) => action.type === "job_create"), ...baseRun],
   }
 }
 

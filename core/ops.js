@@ -6,10 +6,7 @@ const { loadRegistry } = require("./runtime/registry")
 const { loadSessionMetadata, sessionDir } = require("./runtime/session")
 const { readEvents } = require("./runtime/events")
 const { listJobs } = require("./runtime/jobs")
-const { listWorkflows } = require("./runtime/workflows")
 const { listTasks } = require("./runtime/tasks")
-const { listBlockers } = require("./runtime/blockers")
-const { listApprovals } = require("./runtime/approvals")
 
 function defaultStateRoot() {
   return process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
@@ -133,11 +130,9 @@ function buildFollowSurface({ metadata, messages, lastCount = 0 }) {
 }
 
 module.exports = {
-  buildApprovalSurface,
   buildCaptureSurface,
   buildDashboard,
   buildDashboardSurface,
-  buildBlockerSurface,
   buildFollowSurface,
   buildPresenceSurface,
   buildSummary,
@@ -152,15 +147,12 @@ module.exports = {
 function buildDashboard(stateRoot = defaultStateRoot()) {
   const agents = listAgentMetadata(stateRoot)
   const jobs = listJobs(stateRoot)
-  const workflows = listWorkflows(stateRoot)
   const tasks = listTasks(stateRoot)
-  const blockers = listBlockers(stateRoot)
-  const approvals = listApprovals(stateRoot)
 
   const enrichedAgents = agents.map((agent) => classifyAgent(agent, jobs))
 
-  const taskItems = tasks.map((task) => enrichTask(task, workflows, jobs, enrichedAgents))
-  const scheduledJobs = jobs.filter((job) => Boolean(job.trigger) && job.trigger !== 'workflow-complete')
+  const taskItems = tasks.map((task) => enrichTask(task, jobs, enrichedAgents))
+  const scheduledJobs = jobs.filter((job) => Boolean(job.trigger))
   const maintenanceLoops = scheduledJobs.filter((job) => isMaintenanceLoop(job))
 
   return {
@@ -168,19 +160,12 @@ function buildDashboard(stateRoot = defaultStateRoot()) {
     counts: {
       agents: enrichedAgents.length,
       jobs: jobs.length,
-      workflows: workflows.length,
       tasks: tasks.length,
-      blockers: blockers.length,
-      approvals: approvals.length,
     },
     agents: enrichedAgents,
     task_items: taskItems,
     jobs: summarizeByStatus(jobs),
-    workflows: summarizeByStatus(workflows),
     tasks: summarizeByStatus(tasks),
-    open_blockers: blockers.filter((item) => item.status === "open"),
-    pending_approvals: approvals.filter((item) => item.status === "pending"),
-    active_workflows: workflows.filter((item) => item.status === "active"),
     runnable_jobs: jobs.filter((item) => ["queued", "assigned"].includes(item.status)),
     in_progress_jobs: jobs.filter((item) => ["running", "dispatched"].includes(item.status)),
     scheduled_jobs: scheduledJobs,
@@ -188,22 +173,18 @@ function buildDashboard(stateRoot = defaultStateRoot()) {
   }
 }
 
-function enrichTask(task, workflows, jobs, agents = []) {
-  const workflow = task.workflow_id ? workflows.find((wf) => wf.id === task.workflow_id) : null
-  const relatedJobs = workflow ? jobs.filter((job) => job.workflow_id === workflow.id) : []
+function enrichTask(task, jobs, agents = []) {
+  const relatedJobs = jobs.filter((job) => matchesTask(job, task.id))
   const activeJob = relatedJobs.find((job) => ['running', 'dispatched', 'assigned', 'queued', 'blocked'].includes(job.status)) || null
   const logicalOwner = task.assignee || activeJob?.agent || null
-  const activeWorker = activeJob?.agent || logicalOwner || null
-  const workerAgent = activeWorker
-    ? agents.find((agent) => agent.agent_id === activeWorker || agent.name === activeWorker)
+  const workerAgent = logicalOwner
+    ? agents.find((agent) => agent.agent_id === logicalOwner || agent.name === logicalOwner)
     : null
   return {
     ...task,
     logical_owner: logicalOwner,
-    current_step: workflow?.current_step || null,
-    workflow_status: workflow?.status || null,
     active_job_id: activeJob?.id || null,
-    active_agent: activeWorker,
+    active_agent: activeJob?.agent || null,
     active_runtime_instance: workerAgent?.runtime_instance_id || null,
     active_runtime_status: workerAgent?.runtime_state || null,
     active_profile: activeJob?.input?.selected_profile || activeJob?.output?.selected_profile || null,
@@ -227,8 +208,7 @@ function buildSummary(stateRoot = defaultStateRoot(), options = {}) {
   if (options.agent || options.channelBinding) {
     lines.push(`Scope: agent=${options.agent || 'any'}, channel=${options.channelBinding || 'any'}`)
   }
-  lines.push(`Agents: ${dashboard.counts.agents} | Jobs: ${dashboard.counts.jobs} | Workflows: ${dashboard.counts.workflows} | Tasks: ${scoped.tasks.length}`)
-  lines.push(`Open blockers: ${scoped.open_blockers.length} | Pending approvals: ${scoped.pending_approvals.length}`)
+  lines.push(`Agents: ${dashboard.counts.agents} | Jobs: ${dashboard.counts.jobs} | Tasks: ${scoped.tasks.length}`)
 
   const activeAgents = dashboard.agents.map((a) => `${a.name}(${a.runtime_state}${a.host ? `/${a.host}` : ''})`).join(', ')
   lines.push(`Agents: ${activeAgents}`)
@@ -262,26 +242,12 @@ function buildSummary(stateRoot = defaultStateRoot(), options = {}) {
   }
 
   if (scoped.tasks.length) {
-    lines.push('Open tasks:')
+    lines.push('Tasks:')
     for (const task of scoped.tasks.slice(0, 5)) {
-      const owner = task.logical_owner || '-'
-      const worker = task.active_agent || '-'
-      const step = task.current_step || task.workflow_status || task.status || 'unknown'
-      lines.push(`- ${task.title} | owner=${owner} | worker=${worker} | instance=${task.active_runtime_instance || '-'} | step=${step} @ ${task.channel_binding || 'no-channel'}`)
-    }
-  }
-
-  if (scoped.open_blockers.length) {
-    lines.push('Open blockers:')
-    for (const blocker of scoped.open_blockers.slice(0, 5)) {
-      lines.push(`- ${blocker.agent_id}: ${blocker.summary} @ ${blocker.channel_binding || 'no-channel'}`)
-    }
-  }
-
-  if (scoped.pending_approvals.length) {
-    lines.push('Pending approvals:')
-    for (const approval of scoped.pending_approvals.slice(0, 5)) {
-      lines.push(`- ${approval.agent_id}: ${approval.summary} @ ${approval.channel_binding || 'no-channel'}`)
+      const details = [`status=${task.status || 'unknown'}`, `assignee=${task.assignee || '-'}`]
+      if (task.blocked_on) details.push(`blocked_on=${task.blocked_on}`)
+      if (task.active_runtime_instance) details.push(`instance=${task.active_runtime_instance}`)
+      lines.push(`- ${task.title} | ${details.join(' | ')}`)
     }
   }
 
@@ -292,7 +258,7 @@ function buildDashboardSurface(stateRoot = defaultStateRoot()) {
   const dashboard = buildDashboard(stateRoot)
   const lines = []
   lines.push(`OpenFleet dashboard @ ${dashboard.generated_at}`)
-  lines.push(`Counts: agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs} workflows=${dashboard.counts.workflows} tasks=${dashboard.counts.tasks} blockers=${dashboard.counts.blockers} approvals=${dashboard.counts.approvals}`)
+  lines.push(`Counts: agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs} tasks=${dashboard.counts.tasks}`)
   lines.push('')
   lines.push('Agent presence:')
   if (dashboard.agents.length) {
@@ -307,8 +273,10 @@ function buildDashboardSurface(stateRoot = defaultStateRoot()) {
     lines.push('')
     lines.push('Tasks:')
     for (const task of dashboard.task_items.slice(0, 5)) {
-      const step = task.current_step || task.workflow_status || task.status || 'unknown'
-      lines.push(`- ${task.title} | owner=${task.logical_owner || '-'} | worker=${task.active_agent || '-'} | instance=${task.active_runtime_instance || '-'} | step=${step}`)
+      const details = [`status=${task.status || 'unknown'}`, `assignee=${task.assignee || '-'}`]
+      if (task.blocked_on) details.push(`blocked_on=${task.blocked_on}`)
+      if (task.active_runtime_instance) details.push(`instance=${task.active_runtime_instance}`)
+      lines.push(`- ${task.title} | ${details.join(' | ')}`)
     }
   }
 
@@ -341,42 +309,7 @@ function buildDashboardSurface(stateRoot = defaultStateRoot()) {
     lines.push(`Maintenance loops: ${dashboard.maintenance_loops.length}`)
   }
 
-  if (dashboard.open_blockers.length || dashboard.pending_approvals.length) {
-    lines.push('')
-    lines.push(`Flow control: blockers=${dashboard.open_blockers.length} approvals=${dashboard.pending_approvals.length}`)
-  }
-
   return lines.join('\n')
-}
-
-function buildApprovalSurface(stateRoot = defaultStateRoot(), options = {}) {
-  const scoped = scopeDashboard(buildDashboard(stateRoot), options)
-  const label = describeScope(options)
-  if (!scoped.pending_approvals.length) {
-    return `No pending approvals${label}`
-  }
-
-  return [
-    `Pending approvals${label}`,
-    ...scoped.pending_approvals.slice(0, 10).map((approval) => (
-      `- ${approval.summary} | agent=${approval.agent_id || 'unknown'} | action=${approval.action_type || 'approval'} | risk=${approval.risk_class || 'unknown'}`
-    )),
-  ].join('\n')
-}
-
-function buildBlockerSurface(stateRoot = defaultStateRoot(), options = {}) {
-  const scoped = scopeDashboard(buildDashboard(stateRoot), options)
-  const label = describeScope(options)
-  if (!scoped.open_blockers.length) {
-    return `No open blockers${label}`
-  }
-
-  return [
-    `Open blockers${label}`,
-    ...scoped.open_blockers.slice(0, 10).map((blocker) => (
-      `- ${blocker.summary} | agent=${blocker.agent_id || 'unknown'} | question=${blocker.question || 'none'} | urgency=${blocker.urgency || 'normal'}`
-    )),
-  ].join('\n')
 }
 
 function buildPresenceSurface(stateRoot = defaultStateRoot(), options = {}) {
@@ -424,6 +357,14 @@ function renderListSurface(items) {
     return lines.join('\n')
   }
 
+  if (items[0].id && Object.prototype.hasOwnProperty.call(items[0], 'title')) {
+    const lines = ['ID\tTITLE\tSTATUS\tASSIGNEE\tBLOCKED_ON\tUPDATED']
+    for (const item of items) {
+      lines.push(`${item.id}\t${item.title || '-'}\t${item.status || '-'}\t${item.assignee || '-'}\t${item.blocked_on || '-'}\t${item.updated_at || '-'}`)
+    }
+    return lines.join('\n')
+  }
+
   if (items[0].id && items[0].type && Object.prototype.hasOwnProperty.call(items[0], 'current_step')) {
     const lines = ['ID\tTYPE\tSTATUS\tSTEP\tUPDATED']
     for (const item of items) {
@@ -433,9 +374,9 @@ function renderListSurface(items) {
   }
 
   if (items[0].id && items[0].type) {
-    const lines = ['ID\tTYPE\tSTATUS\tAGENT\tWORKFLOW\tUPDATED']
+    const lines = ['ID\tTYPE\tSTATUS\tAGENT\tUPDATED']
     for (const item of items) {
-      lines.push(`${item.id}\t${item.type}\t${item.status || '-'}\t${item.agent || '-'}\t${item.workflow_id || '-'}\t${item.updated_at || '-'}`)
+      lines.push(`${item.id}\t${item.type}\t${item.status || '-'}\t${item.agent || '-'}\t${item.updated_at || '-'}`)
     }
     return lines.join('\n')
   }
@@ -468,17 +409,13 @@ function isMaintenanceLoop(job) {
 
 function scopeDashboard(dashboard, options = {}) {
   const agent = options.agent || null
-  const channelBinding = options.channelBinding || null
-  const matches = (item, agentField, channelField = 'channel_binding') => {
+  const matches = (item, agentField) => {
     if (agent && item?.[agentField] !== agent) return false
-    if (channelBinding && item?.[channelField] !== channelBinding) return false
     return true
   }
 
   return {
     tasks: listOpenTasks(dashboard).filter((item) => matches(item, 'assignee')),
-    open_blockers: dashboard.open_blockers.filter((item) => matches(item, 'agent_id')),
-    pending_approvals: dashboard.pending_approvals.filter((item) => matches(item, 'agent_id')),
   }
 }
 
@@ -490,7 +427,11 @@ function describeScope(options = {}) {
 }
 
 function listOpenTasks(dashboard) {
-  return (dashboard.task_items || []).filter((task) => task.status !== 'done' && task.status !== 'completed' && task.status !== 'cancelled')
+  return (dashboard.task_items || []).filter((task) => !['completed', 'done', 'cancelled', 'archived'].includes(task.status))
+}
+
+function matchesTask(job, taskId) {
+  return job?.input?.task_id === taskId || job?.input?.context?.task_id === taskId
 }
 
 function classifyAgent(agent, jobs) {

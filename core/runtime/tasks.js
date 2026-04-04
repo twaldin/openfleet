@@ -1,7 +1,15 @@
 const fs = require("fs")
 const path = require("path")
 const crypto = require("crypto")
-const { resolveProject } = require('./projects')
+
+const STATUS_ALIASES = {
+  created: 'open',
+  active: 'in_progress',
+  'in-progress': 'in_progress',
+  running: 'in_progress',
+  done: 'completed',
+  awaiting_approval: 'blocked',
+}
 
 function tasksPath(stateDir) {
   return path.join(stateDir, "tasks.json")
@@ -28,27 +36,13 @@ function saveTasks(stateDir, data) {
 
 function createTask(stateDir, input) {
   const data = loadTasks(stateDir)
-  const id = input.id || `task_${crypto.randomUUID()}`
-  const now = new Date().toISOString()
-  const project = resolveProject(stateDir, input)
-  const task = {
-    id,
-    title: input.title || "task",
-    source: input.source || null,
-    project_id: input.project_id || input.projectId || project?.id || null,
-    repo: input.repo || input.source?.repo || project?.repo || null,
-    status: input.status || "created",
-    assignee: input.assignee || null,
-    workflow_id: input.workflow_id || input.workflowId || null,
-    blocker_ids: input.blocker_ids || [],
-    approval_ids: input.approval_ids || [],
-    channel_binding: input.channel_binding || input.channelBinding || project?.channel_binding || null,
-    project_host: input.project_host || project?.host || null,
-    default_runtime_profiles: input.default_runtime_profiles || project?.default_runtime_profiles || null,
-    created_at: now,
-    updated_at: now,
-  }
-  data.tasks[id] = task
+  const task = normalizeTask({
+    ...input,
+    id: input.id || `task_${crypto.randomUUID()}`,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  })
+  data.tasks[task.id] = task
   saveTasks(stateDir, data)
   return task
 }
@@ -57,23 +51,55 @@ function updateTask(stateDir, id, patch) {
   const data = loadTasks(stateDir)
   const current = data.tasks[id]
   if (!current) throw new Error(`Unknown task: ${id}`)
-  const next = {
+  const next = normalizeTask({
     ...current,
     ...patch,
     id,
+    created_at: current.created_at,
     updated_at: new Date().toISOString(),
-  }
+  })
   data.tasks[id] = next
   saveTasks(stateDir, data)
   return next
 }
 
 function getTask(stateDir, id) {
-  return loadTasks(stateDir).tasks[id] || null
+  const task = loadTasks(stateDir).tasks[id]
+  return task ? normalizeTask(task) : null
 }
 
 function listTasks(stateDir) {
-  return Object.values(loadTasks(stateDir).tasks).sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
+  return Object.values(loadTasks(stateDir).tasks)
+    .map((task) => normalizeTask(task))
+    .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
+}
+
+function normalizeTask(input = {}) {
+  const status = normalizeStatus(input.status)
+  const blockedOn = status === 'blocked'
+    ? normalizeBlockedOn(input.blocked_on ?? input.blockedOn, input.status)
+    : null
+
+  return {
+    id: input.id,
+    title: input.title || 'task',
+    status,
+    assignee: input.assignee || null,
+    blocked_on: blockedOn,
+    created_at: input.created_at || new Date().toISOString(),
+    updated_at: input.updated_at || new Date().toISOString(),
+  }
+}
+
+function normalizeStatus(status) {
+  if (!status) return 'open'
+  return STATUS_ALIASES[status] || status
+}
+
+function normalizeBlockedOn(value, originalStatus) {
+  if (value != null && value !== '') return String(value)
+  if (originalStatus === 'awaiting_approval') return 'awaiting approval'
+  return null
 }
 
 function recoverFirstJsonObject(text) {
@@ -115,7 +141,6 @@ module.exports = {
   getTask,
   listTasks,
   loadTasks,
-  saveTasks,
   saveTasks,
   tasksPath,
   updateTask,

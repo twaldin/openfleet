@@ -3,26 +3,26 @@
 const os = require('os')
 const path = require('path')
 const { listTasks, updateTask } = require('../core/runtime/tasks')
-const { getWorkflow } = require('../core/runtime/workflows')
+const { listJobs } = require('../core/runtime/jobs')
 const { createEventStore } = require('../core/runtime/events')
 
 function main() {
   const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
   const eventStore = createEventStore(stateRoot)
   const updated = []
+  const jobs = listJobs(stateRoot)
 
   for (const task of listTasks(stateRoot)) {
-    if (!task.workflow_id) continue
-    const workflow = getWorkflow(stateRoot, task.workflow_id)
-    if (!workflow) continue
-
-    if (workflow.status === 'completed' && task.status !== 'completed') {
-      const next = updateTask(stateRoot, task.id, { status: 'completed' })
+    const relatedJobs = jobs.filter((job) => job.input?.task_id === task.id || job.input?.context?.task_id === task.id)
+    if (relatedJobs.some((job) => ['running', 'dispatched', 'assigned', 'queued'].includes(job.status)) && task.status === 'open') {
+      const next = updateTask(stateRoot, task.id, { status: 'in_progress' })
       eventStore.append({ type: 'task.updated', agent_id: next.assignee || 'openfleet', payload: next })
       updated.push(next)
+      continue
     }
-    if (workflow.status === 'active' && task.status === 'created') {
-      const next = updateTask(stateRoot, task.id, { status: 'active' })
+
+    if (relatedJobs.length > 0 && relatedJobs.every((job) => job.status === 'completed') && task.status !== 'completed') {
+      const next = updateTask(stateRoot, task.id, { status: 'completed' })
       eventStore.append({ type: 'task.updated', agent_id: next.assignee || 'openfleet', payload: next })
       updated.push(next)
     }
