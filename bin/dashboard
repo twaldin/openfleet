@@ -182,22 +182,46 @@ function getCronData() {
 }
 
 function capturePaneContent(agentName) {
+  // Try registry first
   const reg = loadRegistry(STATE_ROOT)
-  let session = null
+  let tmuxSession = null
+  let tmuxWindow = null
+
   for (const s of Object.values(reg.sessions)) {
-    if (s.name === agentName || s.agent_id === agentName) {
-      session = s
+    if ((s.name === agentName || s.agent_id === agentName) && s.tmux_session && s.tmux_window) {
+      tmuxSession = s.tmux_session
+      tmuxWindow = s.tmux_window
       break
     }
   }
 
-  if (!session || !session.tmux_session || !session.tmux_window) {
-    return { error: "Agent not found or no tmux session", content: "" }
+  // Fall back: check orchestrator.json for cairn
+  if (!tmuxSession) {
+    try {
+      const orch = JSON.parse(readFileSync(path.join(STATE_ROOT, "orchestrator.json"), "utf8"))
+      if (agentName === "cairn" || agentName === orch.parent?.agent) {
+        tmuxSession = orch.tmux_session || "openfleet"
+        tmuxWindow = orch.tmux_window || "cairn"
+      }
+    } catch {}
+  }
+
+  // Fall back: try tmux window named after the agent
+  if (!tmuxSession) {
+    const wins = getLiveTmuxWindows()
+    if (wins.has(agentName)) {
+      tmuxSession = "openfleet"
+      tmuxWindow = agentName
+    }
+  }
+
+  if (!tmuxSession || !tmuxWindow) {
+    return { error: "No tmux session for agent", content: "" }
   }
 
   try {
     const content = execFileSync("tmux", [
-      "capture-pane", "-pt", `${session.tmux_session}:${session.tmux_window}`,
+      "capture-pane", "-pt", `${tmuxSession}:${tmuxWindow}`,
       "-S", "-100", "-e",
     ], { encoding: "utf8", timeout: 5000 })
     return { content, agent: agentName }
