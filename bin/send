@@ -49,18 +49,15 @@ function main() {
   const tmuxSession = session.tmux_session
   const tmuxWindow = session.tmux_window
 
-  if ((harness === "claude-code" || harness === "codex") && tmuxSession && tmuxWindow) {
-    // Send via tmux
+  // Prefer tmux if the agent has a live window (works for all harnesses including OpenCode TUI)
+  if (tmuxSession && tmuxWindow && hasTmuxWindow(tmuxSession, tmuxWindow)) {
     sendViaTmux(tmuxSession, tmuxWindow, message)
-    console.log(`Sent to ${target} via tmux (${harness}) @ ${tmuxSession}:${tmuxWindow}`)
-  } else if (harness === "opencode" && session.session_id) {
-    // Send via OpenCode HTTP API
-    sendViaOpencode(session, message, stateRoot)
-    console.log(`Sent to ${target} via opencode API`)
-  } else if (tmuxSession && tmuxWindow) {
-    // Fallback: try tmux if we have coordinates
-    sendViaTmux(tmuxSession, tmuxWindow, message)
-    console.log(`Sent to ${target} via tmux (fallback) @ ${tmuxSession}:${tmuxWindow}`)
+    console.log(`Sent to ${target} via tmux @ ${tmuxSession}:${tmuxWindow}`)
+  } else if (harness === "opencode") {
+    // Fallback: opencode run --continue (finds latest session in agent's directory)
+    const dir = session.directory || session.workspace || path.join(stateRoot, "agents", target)
+    sendViaOpencodeRun(dir, message)
+    console.log(`Sent to ${target} via opencode run --continue --dir ${dir}`)
   } else {
     console.error(`Cannot route message to ${target}: no tmux coords or opencode session`)
     process.exit(1)
@@ -138,14 +135,20 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
-function sendViaOpencode(session, message, stateRoot) {
-  const baseUrl = process.env.OPENCODE_URL || "http://127.0.0.1:4096"
-  const url = `${baseUrl}/session/${session.session_id}/prompt_async?directory=${encodeURIComponent(session.directory || session.workspace || "")}`
-  const payload = JSON.stringify({
-    agent: session.agentProfile || session.name,
-    parts: [{ type: "text", text: message }],
+function sendViaOpencodeRun(dir, message) {
+  execFileSync("opencode", ["run", "--continue", "--dir", dir, message], {
+    encoding: "utf8",
+    timeout: 30000,
+    stdio: "pipe",
   })
-  execFileSync("curl", ["--max-time", "10", "-sS", "-X", "POST", "-H", "Content-Type: application/json", "-d", payload, url], { encoding: "utf8" })
+}
+
+function hasTmuxWindow(session, window) {
+  try {
+    execFileSync("tmux", ["has-session", "-t", session], { stdio: "ignore" })
+    const wins = execFileSync("tmux", ["list-windows", "-t", session, "-F", "#{window_name}"], { encoding: "utf8" })
+    return wins.split("\n").includes(window)
+  } catch { return false }
 }
 
 try {
