@@ -5,6 +5,7 @@ const fs = require("fs")
 const os = require("os")
 const path = require("path")
 const { parseArgs } = require("../lib/opencode")
+const { hashAgentPort } = require("../core/remote/ssh")
 const { loadRegistry, saveRegistry } = require("../core/runtime/registry")
 const { loadAgents, getAgent } = require("../core/runtime/agents")
 const { createEventStore } = require("../core/runtime/events")
@@ -214,6 +215,29 @@ function isAlive(session, {
   runSshCommandImpl = runSshCommand,
   execImpl = execFileSync,
 } = {}) {
+  if (session.harness === "openclaw") {
+    const port = session.openclaw_port || hashAgentPort(session.name || session.agent_id || session.tmux_window || "openclaw")
+    if (session.host) {
+      try {
+        const host = getHostImpl(session.host, hostsFilePathImpl(stateRoot))
+        runSshCommandImpl(host, `curl --max-time 2 -fsS http://127.0.0.1:${port}/api/health`, {
+          timeout: 5000,
+          stdio: "ignore",
+        })
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    try {
+      execImpl("curl", ["--max-time", "2", "-fsS", `http://127.0.0.1:${port}/api/health`], { encoding: "utf8", stdio: "ignore" })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   if (session.host && session.tmux_session && session.tmux_window) {
     try {
       const host = getHostImpl(session.host, hostsFilePathImpl(stateRoot))

@@ -5,6 +5,13 @@ const fs = require("fs")
 const os = require("os")
 const path = require("path")
 const { parseArgs } = require("../lib/opencode")
+const {
+  checkHealth,
+  ensureOpenClawBinary,
+  generateToken,
+  sendMessage,
+  shutdownOpenClaw,
+} = require("../core/harness/openclaw")
 const { loadDeploymentConfig } = require("../core/deployment")
 const { projectInstructions } = require("../core/instructions")
 const { loadRegistry, saveRegistry, upsertSession } = require("../core/runtime/registry")
@@ -40,7 +47,7 @@ async function main() {
   let deployment = null
 
   if (!name) {
-    console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--worktree] [--host <hostname>] [--bootstrap <prompt>]")
+    console.error("Usage: spawn <name> --harness <claude-code|codex|opencode|openclaw> --model <model> [--dir <workdir>] [--worktree] [--host <hostname>] [--bootstrap <prompt>]")
     process.exit(1)
   }
 
@@ -61,8 +68,14 @@ async function main() {
 
   projectInstructions(name, name, harness, workdir, deployment, { stateRoot })
 
-  const launch = buildHarnessLaunchCommand({ harness, model, workdir, name })
+  const openclawToken = harness === "openclaw" ? generateToken() : null
+  if (!hostName && harness === "openclaw") {
+    ensureOpenClawBinary()
+  }
+
+  const launch = buildHarnessLaunchCommand({ harness, model, workdir, name, token: openclawToken })
   let opencodePort = launch.opencodePort
+  let openclawPort = launch.openclawPort
   let sessionWorkdir = workdir
 
   if (hostName) {
@@ -84,8 +97,10 @@ async function main() {
       model,
       workdir: remoteWorkdir,
       name,
+      token: openclawToken,
     })
     opencodePort = remoteLaunch.opencodePort
+    openclawPort = remoteLaunch.openclawPort
     sessionWorkdir = remoteWorkdir
 
     runSshCommand(host, buildRemoteTmuxSpawnCommand({
@@ -103,6 +118,15 @@ async function main() {
     }
 
     // Kill existing window if any
+    if (harness === "openclaw") {
+      const existingSession = findSessionByName(loadRegistry(stateRoot), name)
+      if (existingSession?.openclaw_port && existingSession?.openclaw_token) {
+        try {
+          await shutdownOpenClaw(existingSession.openclaw_port, existingSession.openclaw_token)
+        } catch {}
+      }
+    }
+
     try {
       execFileSync("tmux", ["kill-window", "-t", `${tmuxSession}:${name}`], { stdio: "ignore" })
     } catch { /* fine */ }
@@ -112,8 +136,16 @@ async function main() {
     ], { stdio: "ignore", shell: true })
   }
 
-  // Wait for CLI to initialize (opencode needs longer: serve start + attach)
-  sleep(harness === "opencode" ? 8000 : 3000)
+  if (harness === "openclaw") {
+    if (hostName) {
+      await waitForRemoteOpenClawHealth(getHost(hostName, hostsPath), openclawPort)
+    } else {
+      await waitForOpenClawHealth(openclawPort)
+    }
+  } else {
+    // Wait for CLI to initialize (opencode needs longer: serve start + attach)
+    sleep(harness === "opencode" ? 8000 : 3000)
+  }
 
   // Handle Codex trust prompt
   if (harness === "codex") {
@@ -135,7 +167,9 @@ async function main() {
 
   // Send bootstrap prompt
   if (bootstrap) {
-    if (!hostName && harness === "opencode" && opencodePort) {
+    if (!hostName && harness === "openclaw" && openclawPort && openclawToken) {
+      await sendMessage(openclawPort, openclawToken, bootstrap)
+    } else if (!hostName && harness === "opencode" && opencodePort) {
       // OpenCode: inject bootstrap via TUI API (append-prompt + submit-prompt)
       try {
         execFileSync("curl", [
@@ -151,11 +185,19 @@ async function main() {
         console.error(`Warning: bootstrap via TUI API failed: ${e.message}`)
       }
     } else if (hostName) {
-      runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({
-        tmuxSession,
-        windowName: name,
-        message: bootstrap,
-      }), { timeout: 30000, stdio: "ignore" })
+      if (harness === "openclaw" && openclawPort && openclawToken) {
+        runSshCommand(getHost(hostName, hostsPath), buildRemoteOpenClawMessageCommand({
+          port: openclawPort,
+          token: openclawToken,
+          message: bootstrap,
+        }), { timeout: 30000, stdio: "ignore" })
+      } else {
+        runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({
+          tmuxSession,
+          windowName: name,
+          message: bootstrap,
+        }), { timeout: 30000, stdio: "ignore" })
+      }
     } else {
       sendToPane(tmuxSession, name, bootstrap)
     }
@@ -178,6 +220,8 @@ async function main() {
     workspace: sessionWorkdir,
     worktree: worktreeInfo,
     opencode_port: opencodePort || null,
+    openclaw_port: openclawPort || null,
+    openclaw_token: openclawToken,
     host: hostName,
     transport: hostName ? "ssh" : null,
     created_at: Date.now(),
@@ -245,6 +289,50 @@ function sendToPane(session, window, message) {
 
 function capturePane(session, window) {
   return execFileSync("tmux", ["capture-pane", "-pt", `${session}:${window}`, "-S", "-40"], { encoding: "utf8" })
+}
+
+function findSessionByName(registry, name) {
+  for (const session of Object.values(registry.sessions || {})) {
+    if (session.name === name || session.agent_id === name) return session
+  }
+  return null
+}
+
+function buildRemoteOpenClawMessageCommand({ port, token, message }) {
+  const payload = JSON.stringify({ message }).replace(/'/g, `'\\''`)
+  return `curl --max-time 10 -fsS -X POST http://127.0.0.1:${port}/api/channels/openfleet/messages -H 'Authorization: Bearer ${token}' -H 'Content-Type: application/json' -d '${payload}'`
+}
+
+async function waitForOpenClawHealth(port, {
+  timeoutMs = 30000,
+  checkHealthImpl = checkHealth,
+  sleepImpl = sleep,
+} = {}) {
+  const started = Date.now()
+  while ((Date.now() - started) < timeoutMs) {
+    if (await checkHealthImpl(port)) return true
+    sleepImpl(500)
+  }
+  throw new Error(`Timed out waiting for OpenClaw health on port ${port}`)
+}
+
+async function waitForRemoteOpenClawHealth(host, port, {
+  timeoutMs = 30000,
+  runSshCommandImpl = runSshCommand,
+  sleepImpl = sleep,
+} = {}) {
+  const started = Date.now()
+  while ((Date.now() - started) < timeoutMs) {
+    try {
+      runSshCommandImpl(host, `curl --max-time 2 -fsS http://127.0.0.1:${port}/api/health`, {
+        timeout: 5000,
+        stdio: "ignore",
+      })
+      return true
+    } catch {}
+    sleepImpl(500)
+  }
+  throw new Error(`Timed out waiting for remote OpenClaw health on port ${port}`)
 }
 
 function sleep(ms) {

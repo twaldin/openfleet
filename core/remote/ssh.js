@@ -3,6 +3,7 @@ const path = require("path")
 const { execFileSync } = require("child_process")
 const readline = require("node:readline/promises")
 const { readJson, writeJson } = require("../../lib/opencode")
+const { buildSpawnCommand: buildOpenClawSpawnCommand } = require("../harness/openclaw")
 
 const DEFAULT_TMUX_SESSION = "openfleet"
 const DEFAULT_REMOTE_ROOT = "~/.openfleet/workspaces"
@@ -11,6 +12,7 @@ const HARNESS_DEPENDENCIES = {
   "claude-code": ["claude"],
   codex: ["codex"],
   opencode: ["opencode"],
+  openclaw: ["openclaw"],
 }
 const INSTALLABLE_DEPENDENCIES = new Set(BASE_REMOTE_DEPENDENCIES)
 
@@ -140,7 +142,7 @@ function hashAgentPort(name) {
   return 14000 + Math.abs([...name].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 0) % 1000)
 }
 
-function buildHarnessLaunchCommand({ harness, model, workdir, name }) {
+function buildHarnessLaunchCommand({ harness, model, workdir, name, token = null }) {
   switch (harness) {
     case "claude-code":
       return { command: `claude --dangerously-skip-permissions --model ${model}`, opencodePort: null }
@@ -150,6 +152,13 @@ function buildHarnessLaunchCommand({ harness, model, workdir, name }) {
       const opencodePort = hashAgentPort(name)
       const inner = `opencode serve --port ${opencodePort} & sleep 4; opencode attach http://127.0.0.1:${opencodePort} --dir ${shellQuote(workdir)}`
       return { command: `bash -c ${shellQuote(inner)}`, opencodePort }
+    }
+    case "openclaw": {
+      const openclawPort = hashAgentPort(name)
+      return {
+        command: buildOpenClawSpawnCommand(name, model, openclawPort, workdir, token),
+        openclawPort,
+      }
     }
     default:
       throw new Error(`Unknown harness: ${harness}`)
@@ -353,6 +362,7 @@ module.exports = {
   dependenciesForHarness,
   ensureRemoteHost,
   getHost,
+  hashAgentPort,
   hostsFilePath,
   loadHosts,
   resolveRemoteWorkdir,
