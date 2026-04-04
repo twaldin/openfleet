@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+
+const os = require("os")
+const path = require("path")
+const { parseArgs } = require("../lib/opencode")
+const {
+  BASE_REMOTE_DEPENDENCIES,
+  checkRemoteDependencies,
+  ensureRemoteHost,
+  getHost,
+  hostsFilePath,
+  loadHosts,
+  upsertHost,
+} = require("../core/remote/ssh")
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const [command, name] = args._
+  const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const filePath = hostsFilePath(stateRoot)
+
+  if (command === "add") {
+    if (!name || !args.ip || !args.user) {
+      throw new Error("Usage: host add <name> --ip <ip> --user <user> [--ssh-key <path>]")
+    }
+
+    return print({
+      name,
+      ...upsertHost(name, {
+        ip: args.ip,
+        user: args.user,
+        ssh_key: args["ssh-key"] || args.ssh_key || null,
+        bootstrapped: false,
+        installed: [],
+      }, filePath),
+    })
+  }
+
+  if (command === "list") {
+    return print(loadHosts(filePath).hosts)
+  }
+
+  if (command === "check") {
+    if (!name) {
+      throw new Error("Usage: host check <name> [--harness <claude-code|codex|opencode>]")
+    }
+    const host = getHost(name, filePath)
+    const target = args.harness || BASE_REMOTE_DEPENDENCIES
+    return print({
+      name,
+      ...checkRemoteDependencies(host, target),
+    })
+  }
+
+  if (command === "setup") {
+    if (!name) {
+      throw new Error("Usage: host setup <name> [--harness <claude-code|codex|opencode>]")
+    }
+    const host = getHost(name, filePath)
+    const target = args.harness || BASE_REMOTE_DEPENDENCIES
+    return print({
+      name,
+      ...(await ensureRemoteHost({
+        hostName: name,
+        host,
+        harness: target,
+        hostsFile: filePath,
+      })),
+    })
+  }
+
+  throw new Error("Usage: host <add|list|check|setup>")
+}
+
+function print(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})

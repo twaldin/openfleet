@@ -8,6 +8,12 @@ const { parseArgs } = require("../lib/opencode")
 const { loadRegistry, saveRegistry } = require("../core/runtime/registry")
 const { loadAgents, getAgent } = require("../core/runtime/agents")
 const { createEventStore } = require("../core/runtime/events")
+const {
+  buildRemoteTmuxHasSessionCommand,
+  getHost,
+  hostsFilePath,
+  runSshCommand,
+} = require("../core/remote/ssh")
 
 const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
 const BIN = __dirname
@@ -203,12 +209,34 @@ function showStatus() {
   }
 }
 
-function isAlive(session) {
+function isAlive(session, {
+  stateRoot = STATE_ROOT,
+  getHostImpl = getHost,
+  hostsFilePathImpl = hostsFilePath,
+  runSshCommandImpl = runSshCommand,
+  execImpl = execFileSync,
+} = {}) {
+  if (session.host && session.tmux_session && session.tmux_window) {
+    try {
+      const host = getHostImpl(session.host, hostsFilePathImpl(stateRoot))
+      runSshCommandImpl(host, buildRemoteTmuxHasSessionCommand({
+        tmuxSession: session.tmux_session,
+        windowName: session.tmux_window,
+      }), {
+        timeout: 5000,
+        stdio: "ignore",
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   // Primary check: does the agent have a live tmux window?
   if (session.tmux_session && session.tmux_window) {
     try {
-      execFileSync("tmux", ["has-session", "-t", session.tmux_session], { stdio: "ignore" })
-      const wins = execFileSync("tmux", ["list-windows", "-t", session.tmux_session, "-F", "#{window_name}"], { encoding: "utf8" })
+      execImpl("tmux", ["has-session", "-t", session.tmux_session], { stdio: "ignore" })
+      const wins = execImpl("tmux", ["list-windows", "-t", session.tmux_session, "-F", "#{window_name}"], { encoding: "utf8" })
       if (wins.split("\n").includes(session.tmux_window)) return true
     } catch {}
   }
@@ -216,9 +244,15 @@ function isAlive(session) {
   return false
 }
 
-try {
-  main()
-} catch (e) {
-  console.error(e.message)
-  process.exit(1)
+if (require.main === module) {
+  try {
+    main()
+  } catch (e) {
+    console.error(e.message)
+    process.exit(1)
+  }
+}
+
+module.exports = {
+  isAlive,
 }

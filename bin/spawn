@@ -9,8 +9,21 @@ const { loadDeploymentConfig } = require("../core/deployment")
 const { projectInstructions } = require("../core/instructions")
 const { loadRegistry, saveRegistry, upsertSession } = require("../core/runtime/registry")
 const { createEventStore } = require("../core/runtime/events")
+const {
+  buildHarnessLaunchCommand,
+  buildRemoteMkdirCommand,
+  buildRemoteTmuxCaptureCommand,
+  buildRemoteTmuxSendCommand,
+  buildRemoteTmuxSpawnCommand,
+  ensureRemoteHost,
+  getHost,
+  hostsFilePath,
+  resolveRemoteWorkdir,
+  rsyncDirectory,
+  runSshCommand,
+} = require("../core/remote/ssh")
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2))
   const name = args._[0]
   const harness = args.harness || "claude-code"
@@ -18,13 +31,15 @@ function main() {
   let workdir = args.dir || process.env.OPENFLEET_WORKSPACE_ROOT || os.homedir()
   const tmuxSession = args["tmux-session"] || "openfleet"
   const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+  const hostsPath = hostsFilePath(stateRoot)
+  const hostName = args.host || null
   const bootstrap = args.bootstrap || null
   const useWorktree = args.worktree || false
   const baseBranch = args["base-branch"] || "main"
   const deploymentPath = process.env.OPENFLEET_DEPLOYMENT || null
 
   if (!name) {
-    console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--worktree] [--bootstrap <prompt>]")
+    console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--worktree] [--host <hostname>] [--bootstrap <prompt>]")
     process.exit(1)
   }
 
@@ -44,57 +59,81 @@ function main() {
     } catch {}
   }
 
-  // Ensure tmux session exists
-  try {
-    execFileSync("tmux", ["has-session", "-t", tmuxSession], { stdio: "ignore" })
-  } catch {
-    execFileSync("tmux", ["new-session", "-d", "-s", tmuxSession, "-n", "bootstrap"], { stdio: "ignore" })
+  const launch = buildHarnessLaunchCommand({ harness, model, workdir, name })
+  let opencodePort = launch.opencodePort
+  let sessionWorkdir = workdir
+
+  if (hostName) {
+    const host = getHost(hostName, hostsPath)
+    const remoteWorkdir = args["remote-dir"] || resolveRemoteWorkdir(name)
+
+    await ensureRemoteHost({
+      hostName,
+      host,
+      harness,
+      hostsFile: hostsPath,
+    })
+
+    runSshCommand(host, buildRemoteMkdirCommand(remoteWorkdir), { timeout: 30000, stdio: "ignore" })
+    rsyncDirectory(host, workdir, remoteWorkdir)
+
+    const remoteLaunch = buildHarnessLaunchCommand({
+      harness,
+      model,
+      workdir: remoteWorkdir,
+      name,
+    })
+    opencodePort = remoteLaunch.opencodePort
+    sessionWorkdir = remoteWorkdir
+
+    runSshCommand(host, buildRemoteTmuxSpawnCommand({
+      tmuxSession,
+      windowName: name,
+      workdir: remoteWorkdir,
+      launchCommand: remoteLaunch.command,
+    }), { timeout: 30000, stdio: "ignore" })
+  } else {
+    // Ensure tmux session exists
+    try {
+      execFileSync("tmux", ["has-session", "-t", tmuxSession], { stdio: "ignore" })
+    } catch {
+      execFileSync("tmux", ["new-session", "-d", "-s", tmuxSession, "-n", "bootstrap"], { stdio: "ignore" })
+    }
+
+    // Kill existing window if any
+    try {
+      execFileSync("tmux", ["kill-window", "-t", `${tmuxSession}:${name}`], { stdio: "ignore" })
+    } catch { /* fine */ }
+
+    execFileSync("tmux", [
+      "new-window", "-t", tmuxSession, "-n", name, "-c", workdir, launch.command,
+    ], { stdio: "ignore", shell: true })
   }
-
-  // Kill existing window if any
-  try {
-    execFileSync("tmux", ["kill-window", "-t", `${tmuxSession}:${name}`], { stdio: "ignore" })
-  } catch { /* fine */ }
-
-  // Launch the right CLI
-  let launchCmd
-  let opencodePort = null
-  switch (harness) {
-    case "claude-code":
-      launchCmd = `claude --dangerously-skip-permissions --model ${model}`
-      break
-    case "codex":
-      launchCmd = `codex -m ${model} -C ${workdir} --full-auto`
-      break
-    case "opencode":
-      // Headless server + TUI attached to it
-      opencodePort = 14000 + Math.abs([...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0) % 1000)
-      launchCmd = `bash -c 'opencode serve --port ${opencodePort} & sleep 4; opencode attach http://127.0.0.1:${opencodePort} --dir ${workdir}'`
-      break
-    default:
-      console.error(`Unknown harness: ${harness}`)
-      process.exit(1)
-  }
-
-  execFileSync("tmux", [
-    "new-window", "-t", tmuxSession, "-n", name, "-c", workdir, launchCmd,
-  ], { stdio: "ignore", shell: true })
 
   // Wait for CLI to initialize (opencode needs longer: serve start + attach)
   sleep(harness === "opencode" ? 8000 : 3000)
 
   // Handle Codex trust prompt
   if (harness === "codex") {
-    const pane = capturePane(tmuxSession, name)
+    const pane = hostName
+      ? runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxCaptureCommand({ tmuxSession, windowName: name }), { timeout: 5000 })
+      : capturePane(tmuxSession, name)
     if (pane.includes("Do you trust")) {
-      execFileSync("tmux", ["send-keys", "-t", `${tmuxSession}:${name}`, "1", "Enter"], { stdio: "ignore" })
+      if (hostName) {
+        runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({ tmuxSession, windowName: name, message: "1" }), {
+          timeout: 15000,
+          stdio: "ignore",
+        })
+      } else {
+        execFileSync("tmux", ["send-keys", "-t", `${tmuxSession}:${name}`, "1", "Enter"], { stdio: "ignore" })
+      }
       sleep(1500)
     }
   }
 
   // Send bootstrap prompt
   if (bootstrap) {
-    if (harness === "opencode" && opencodePort) {
+    if (!hostName && harness === "opencode" && opencodePort) {
       // OpenCode: inject bootstrap via TUI API (append-prompt + submit-prompt)
       try {
         execFileSync("curl", [
@@ -109,6 +148,12 @@ function main() {
       } catch (e) {
         console.error(`Warning: bootstrap via TUI API failed: ${e.message}`)
       }
+    } else if (hostName) {
+      runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({
+        tmuxSession,
+        windowName: name,
+        message: bootstrap,
+      }), { timeout: 30000, stdio: "ignore" })
     } else {
       sendToPane(tmuxSession, name, bootstrap)
     }
@@ -126,11 +171,13 @@ function main() {
     model,
     tmux_session: tmuxSession,
     tmux_window: name,
-    directory: workdir,
+    directory: sessionWorkdir,
     agentProfile: name,
-    workspace: workdir,
+    workspace: sessionWorkdir,
     worktree: worktreeInfo,
     opencode_port: opencodePort || null,
+    host: hostName,
+    transport: hostName ? "ssh" : null,
     created_at: Date.now(),
   })
   saveRegistry(stateRoot, registry)
@@ -143,8 +190,9 @@ function main() {
     payload: {
       harness, model,
       tmux_session: tmuxSession, tmux_window: name,
-      workdir,
+      workdir: sessionWorkdir,
       worktree: worktreeInfo,
+      host: hostName,
     },
   })
 
@@ -156,8 +204,9 @@ function main() {
     session_id: sessionId,
     tmux_session: tmuxSession,
     tmux_window: name,
-    workdir,
+    workdir: sessionWorkdir,
     worktree: worktreeInfo,
+    host: hostName,
   }
   console.log(JSON.stringify(result, null, 2))
 }
@@ -200,9 +249,7 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
-try {
-  main()
-} catch (e) {
+main().catch((e) => {
   console.error(e.message)
   process.exit(1)
-}
+})

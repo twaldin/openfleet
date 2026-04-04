@@ -39,6 +39,7 @@ const commands = {
   // Profiles
   profile: (args) => run("profile", args),
   profiles: () => run("profile", ["list"]),
+  host: (args) => run("host", args),
 
   // Dashboard
   "web-dashboard": (args) => run("dashboard", args),
@@ -111,6 +112,7 @@ COMMUNICATION
 PROFILES
   profile <subcmd>    Runtime profile management
   profiles            List all runtime profiles
+  host <subcmd>       Remote host management
 
 OPERATIONS
   bridge [args]       Start remote event bridge
