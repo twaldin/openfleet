@@ -86,17 +86,26 @@ function respawnDormant(args) {
       console.error(`${name}: instruction projection failed — ${e.message}`)
     }
 
-    // Build bootstrap prompt from workspace files
+    // Build bootstrap: read identity files, then execute the agent's cron scan prompt
     const soulFile = path.join(resolvedDir, "SOUL.md")
     const stateFile = path.join(resolvedDir, "state.md")
     const memoryFile = path.join(resolvedDir, "MEMORY.md")
+
+    // Find the agent's cron job prompt for immediate work
+    let cronPrompt = ""
+    try {
+      const cronConfig = JSON.parse(fs.readFileSync(path.join(STATE_ROOT, "cron.json"), "utf8"))
+      const job = (cronConfig.jobs || []).find(j => j.target === name)
+      if (job?.prompt) cronPrompt = job.prompt
+    } catch {}
 
     const prompt = [
       `You are the persistent ${name} agent. You have been respawned.`,
       fs.existsSync(soulFile) ? `Read your identity: ${soulFile}` : "",
       fs.existsSync(stateFile) ? `Read your last state: ${stateFile}` : "",
       fs.existsSync(memoryFile) ? `Read your memory: ${memoryFile}` : "",
-      `Resume your normal operations. Post a status update to your Discord channel using: openfleet post "your update"`,
+      `After reading your files, immediately execute this task:`,
+      cronPrompt || `Resume your normal operations. Post a status update using: openfleet post "your update"`,
     ].filter(Boolean).join("\n")
 
     try {
