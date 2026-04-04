@@ -837,12 +837,18 @@ html, body {
   var keyBuffer = "";
   var keyFlushTimer = null;
 
+  // Also allow clicking the pane to focus it
+  $paneViewer.addEventListener("click", function() {
+    if (selectedAgent) $paneViewer.focus();
+  });
+
   $paneViewer.addEventListener("keydown", function(e) {
     if (!selectedAgent) return;
     // Don't capture browser shortcuts
-    if (e.metaKey || e.ctrlKey && e.key !== "c") return;
+    if (e.metaKey || (e.ctrlKey && e.key !== "c")) return;
 
     e.preventDefault();
+    e.stopPropagation();
     var key = "";
     if (e.key === "Enter") key = "\n";
     else if (e.key === "Backspace") key = "\b";
@@ -851,6 +857,10 @@ html, body {
     else if (e.ctrlKey && e.key === "c") key = "\x03";
     else if (e.key.length === 1) key = e.key;
     else return; // ignore F-keys, arrows for now
+
+    // Visual feedback — flash border
+    $paneViewer.style.outline = "1px solid var(--green)";
+    setTimeout(function() { $paneViewer.style.outline = ""; }, 100);
 
     keyBuffer += key;
     // Batch keystrokes and flush every 50ms for efficiency
@@ -874,6 +884,7 @@ html, body {
 
   function refreshPane() {
     if (!selectedAgent) return;
+    var hadFocus = document.activeElement === $paneViewer;
     fetch("/api/agents/" + encodeURIComponent(selectedAgent) + "/pane")
       .then(function(r) { return r.text(); })
       .then(function(text) {
@@ -887,8 +898,9 @@ html, body {
         }
         $paneViewer.innerHTML = "";
         $paneViewer.appendChild(parseAnsi(text));
-        // Auto-scroll to bottom
         $paneViewer.scrollTop = $paneViewer.scrollHeight;
+        // Restore focus after content replacement
+        if (hadFocus) $paneViewer.focus();
       })
       .catch(function() {
         // Silently ignore fetch errors for pane
