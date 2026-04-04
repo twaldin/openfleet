@@ -149,6 +149,45 @@ html, body {
   padding: 4px 0;
 }
 
+.agent-section + .agent-section {
+  border-top: 1px solid rgba(48, 54, 61, 0.7);
+}
+
+.agent-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 16px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.agent-section-title {
+  min-width: 0;
+}
+
+.agent-section-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-section-toggle:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.agent-section-toggle-label {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
 .agent-item {
   display: flex;
   align-items: center;
@@ -168,6 +207,19 @@ html, body {
   border-left-color: var(--blue);
 }
 
+.agent-item.compact {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.agent-item.compact .agent-name {
+  font-size: 12px;
+}
+
+.agent-item.compact .agent-meta {
+  font-size: 10px;
+}
+
 .agent-summary-row {
   padding: 8px 16px;
   font-size: 11px;
@@ -185,6 +237,7 @@ html, body {
 .agent-status-indicator.alive { background: var(--green); box-shadow: 0 0 4px var(--green); }
 .agent-status-indicator.dormant { background: var(--text-dim); }
 .agent-status-indicator.dead { background: var(--red); opacity: 0.6; }
+.agent-status-indicator.past { background: var(--text-dim); opacity: 0.85; }
 
 .agent-info {
   flex: 1;
@@ -770,6 +823,7 @@ html, body {
   let selectedAgent = null;
   let paneRefreshTimer = null;
   let agents = [];
+  let pastAgentsExpanded = false;
   let authToken = loadStoredToken();
   let streamSource = null;
 
@@ -960,30 +1014,35 @@ html, body {
   function renderAgents(agentData) {
     agents = agentData;
     $agentList.innerHTML = "";
-    const visibleAgents = getVisibleAgents(agentData);
-    const hiddenDeadEphemeralCount = Math.max(0, agentData.length - visibleAgents.length);
-    $agentCount.textContent = hiddenDeadEphemeralCount ? (visibleAgents.length + " + " + hiddenDeadEphemeralCount + " hidden") : visibleAgents.length;
+    $agentCount.textContent = agentData.length;
 
-    for (const agent of visibleAgents) {
-      const el = document.createElement("div");
-      el.className = "agent-item" + (selectedAgent === agent.name ? " selected" : "");
-      el.dataset.name = agent.name;
-      el.innerHTML =
-        '<div class="agent-status-indicator ' + agent.status + '"></div>' +
-        '<div class="agent-info">' +
-          '<div class="agent-name">' + esc(agent.name) + '</div>' +
-          '<div class="agent-meta">' + esc((agent.harness || "?") + " / " + (agent.model || "?")) + '</div>' +
-        '</div>' +
-        '<span class="agent-role-badge ' + esc(agent.role) + '">' + esc(agent.role) + '</span>';
-      el.addEventListener("click", function() { selectAgent(agent.name); });
-      $agentList.appendChild(el);
+    const activeAgents = [];
+    const pastAgents = [];
+
+    for (const agent of agentData) {
+      if (isPastAgent(agent)) pastAgents.push(agent);
+      else activeAgents.push(agent);
     }
 
-    if (hiddenDeadEphemeralCount > 0) {
-      const hidden = document.createElement("div");
-      hidden.className = "agent-summary-row";
-      hidden.textContent = "+ " + hiddenDeadEphemeralCount + " dead ephemeral agents hidden";
-      $agentList.appendChild(hidden);
+    renderAgentSection({
+      title: "Active Agents",
+      agents: activeAgents,
+      compact: false,
+      collapsible: false,
+      expanded: true,
+    });
+
+    if (pastAgents.length > 0) {
+      const showPastAgents = pastAgentsExpanded || pastAgents.some(function(agent) {
+        return agent.name === selectedAgent;
+      });
+      renderAgentSection({
+        title: "Past Agents",
+        agents: pastAgents,
+        compact: true,
+        collapsible: true,
+        expanded: showPastAgents,
+      });
     }
   }
 
@@ -1054,12 +1113,78 @@ html, body {
     $uptime.textContent = "up " + formatDuration(data.uptime_ms || 0);
   }
 
-  function getVisibleAgents(agentData) {
-    return agentData.filter(function(agent) {
-      if (selectedAgent && agent.name === selectedAgent) return true;
-      if (agent.alive || agent.status === "alive" || agent.status === "dormant") return true;
-      return agent.role === "persistent" || agent.role === "orchestrator";
-    });
+  function isPastAgent(agent) {
+    return agent.role === "ephemeral" && !agent.alive;
+  }
+
+  function renderAgentSection(options) {
+    const section = document.createElement("div");
+    section.className = "agent-section";
+
+    const header = options.collapsible ? document.createElement("button") : document.createElement("div");
+    header.className = "agent-section-header" + (options.collapsible ? " agent-section-toggle" : "");
+    if (options.collapsible) {
+      header.type = "button";
+      header.setAttribute("aria-expanded", options.expanded ? "true" : "false");
+      header.addEventListener("click", function() {
+        pastAgentsExpanded = !pastAgentsExpanded;
+        renderAgents(agents);
+      });
+    }
+
+    const title = document.createElement("span");
+    title.className = "agent-section-title";
+    title.textContent = options.collapsible
+      ? options.title + " (" + options.agents.length + ")"
+      : options.title;
+    header.appendChild(title);
+
+    const count = document.createElement("span");
+    count.className = options.collapsible ? "agent-section-toggle-label" : "count";
+    count.textContent = options.collapsible
+      ? (options.expanded ? "Hide" : "Show")
+      : String(options.agents.length);
+    header.appendChild(count);
+
+    section.appendChild(header);
+
+    if (!options.expanded) {
+      $agentList.appendChild(section);
+      return;
+    }
+
+    for (const agent of options.agents) {
+      section.appendChild(renderAgentRow(agent, options.compact));
+    }
+
+    if (options.collapsible && options.agents.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "agent-summary-row";
+      empty.textContent = "No past agents";
+      section.appendChild(empty);
+    }
+
+    $agentList.appendChild(section);
+  }
+
+  function renderAgentRow(agent, compact) {
+    const el = document.createElement("div");
+    el.className = "agent-item" + (compact ? " compact" : "") + (selectedAgent === agent.name ? " selected" : "");
+    el.dataset.name = agent.name;
+    el.innerHTML = compact
+      ? '<div class="agent-status-indicator past"></div>' +
+        '<div class="agent-info">' +
+          '<div class="agent-name">' + esc(agent.name) + '</div>' +
+          '<div class="agent-meta">' + esc(agent.harness || "?") + '</div>' +
+        '</div>'
+      : '<div class="agent-status-indicator ' + esc(agent.status || "dead") + '"></div>' +
+        '<div class="agent-info">' +
+          '<div class="agent-name">' + esc(agent.name) + '</div>' +
+          '<div class="agent-meta">' + esc((agent.harness || "?") + " / " + (agent.model || "?")) + '</div>' +
+        '</div>' +
+        '<span class="agent-role-badge ' + esc(agent.role) + '">' + esc(agent.role) + '</span>';
+    el.addEventListener("click", function() { selectAgent(agent.name); });
+    return el;
   }
 
   function summarizeEvent(evt) {
@@ -1085,6 +1210,9 @@ html, body {
 
   function selectAgent(name) {
     selectedAgent = name;
+    if (agents.some(function(agent) { return agent.name === name && isPastAgent(agent); })) {
+      pastAgentsExpanded = true;
+    }
     $paneHeader.textContent = "Terminal \u2014 " + name;
     $msgInput.disabled = false;
     $msgInput.placeholder = "Message " + name + "...";
