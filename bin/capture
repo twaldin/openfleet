@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+// openfleet capture — passive agent output monitoring
+// Periodically captures tmux panes, diffs against previous, pattern-matches for events.
+const { execFileSync } = require("child_process")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+const { createEventStore } = require("../core/runtime/events")
+const { loadRemoteConfig, resolveCaptureConfig } = require("../core/remote/config")
+const { loadAgents } = require("../core/runtime/agents")
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const CAPTURE_DIR = path.join(STATE_ROOT, "capture")
+const TMUX_SESSION = "openfleet"
+
+const PATTERNS = [
+  { pattern: /\b(Error|ENOENT|FATAL|panic|TypeError|ReferenceError|SyntaxError)\b/i, type: "agent.error", field: "error" },
+  { pattern: /\b(blocked|waiting for|need approval|need.*decision)\b/i, type: "agent.blocked", field: "reason" },
+  { pattern: /\b(completed|task.*complete|finished|done.*successfully)\b/i, type: "agent.task_completed", field: "summary" },
+]
+
+function log(msg) { console.log(`[capture] ${new Date().toISOString().slice(11,19)} ${msg}`) }
+
+function capturePane(agentName) {
+  try {
+    return execFileSync("tmux", [
+      "capture-pane", "-pt", `${TMUX_SESSION}:${agentName}`, "-S", "-50",
+    ], { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] })
+  } catch {
+    return null
+  }
+}
+
+function loadLastCapture(agentName) {
+  const filePath = path.join(CAPTURE_DIR, `${agentName}.last`)
+  try { return fs.readFileSync(filePath, "utf8") } catch { return "" }
+}
+
+function saveCapture(agentName, content) {
+  fs.mkdirSync(CAPTURE_DIR, { recursive: true })
+  fs.writeFileSync(path.join(CAPTURE_DIR, `${agentName}.last`), content)
+}
+
+function diffLines(previous, current) {
+  const prevLines = new Set(previous.split("\n"))
+  return current.split("\n").filter(line => line.trim() && !prevLines.has(line))
+}
+
+function matchPatterns(newLines) {
+  const matches = []
+  const text = newLines.join("\n")
+
+  for (const { pattern, type, field } of PATTERNS) {
+    const match = text.match(pattern)
+    if (match) {
+      // Grab context: the matching line + 1 line before/after
+      const lineIdx = newLines.findIndex(l => pattern.test(l))
+      const context = newLines.slice(Math.max(0, lineIdx - 1), lineIdx + 2).join("\n")
+      matches.push({ type, payload: { [field]: context } })
+    }
+  }
+
+  return matches
+}
+
+function captureAgent(agentName, events) {
+  const current = capturePane(agentName)
+  if (current === null) return // window doesn't exist or agent not in tmux
+
+  const previous = loadLastCapture(agentName)
+  saveCapture(agentName, current)
+
+  const newLines = diffLines(previous, current)
+  if (newLines.length === 0) return
+
+  const matches = matchPatterns(newLines)
+  for (const { type, payload } of matches) {
+    events.append({
+      type,
+      agent_id: agentName,
+      severity: type === "agent.error" ? "error" : "info",
+      payload,
+    })
+    log(`${agentName}: emitted ${type}`)
+  }
+}
+
+function isAgentAlive(agentName) {
+  try {
+    const wins = execFileSync("tmux", [
+      "list-windows", "-t", TMUX_SESSION, "-F", "#{window_name}",
+    ], { encoding: "utf8" })
+    return wins.split("\n").includes(agentName)
+  } catch {
+    return false
+  }
+}
+
+function runOnce() {
+  const config = loadRemoteConfig(STATE_ROOT)
+  const agents = loadAgents(STATE_ROOT)
+  const events = createEventStore(STATE_ROOT)
+
+  for (const [name, agent] of Object.entries(agents)) {
+    if (agent.role === "orchestrator") continue // don't capture the orchestrator
+    const captureConf = resolveCaptureConfig(config, name)
+    if (!captureConf.enabled) continue
+    if (!isAgentAlive(name)) continue
+
+    captureAgent(name, events)
+  }
+}
+
+function main() {
+  const args = process.argv.slice(2)
+
+  if (args.includes("--once")) {
+    runOnce()
+    return
+  }
+
+  // Daemon mode — run on interval
+  const config = loadRemoteConfig(STATE_ROOT)
+  const interval = (config?.capture?.default_interval_seconds || 30) * 1000
+
+  log(`Starting capture daemon (interval: ${interval / 1000}s)`)
+  runOnce()
+  setInterval(runOnce, interval)
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(`[capture] Fatal: ${e.message}`)
+  process.exit(1)
+}

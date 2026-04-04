@@ -78,11 +78,13 @@ function buildOpenFleetCommands(agent, role, deployment, rootDir) {
   const agentChannel = resolveChannelBinding(routing, { agent: role }) || resolveChannelBinding(routing, { agent }) || null
   const stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
 
+  const postBin = path.join(rootDir, "bin", "post")
+
   const lines = [
     `# OpenFleet Commands`,
     ``,
+    `Post to your channel: node ${postBin} "<msg>"`,
     `Message parent: node ${sendBin} --to-parent --sender ${agent} --message "<update>"`,
-    `Post to Discord: node ${remoteBin} discord post --channel "${agentChannel || ""}" --message "<msg>"`,
     ``,
     `## Completion Protocol`,
     `When job is done: node ${reportCompletionBin} <job-id> --summary "<summary>" --continue --execute`,
@@ -94,7 +96,7 @@ function buildOpenFleetCommands(agent, role, deployment, rootDir) {
     `When context is heavy or told to compact:`,
     `1. Save state to ~/.openfleet/agents/${agent}/MEMORY.md`,
     `2. Append today's key events to ~/.openfleet/agents/${agent}/memory/YYYY-MM-DD.md`,
-    `3. Post status to Discord channel`,
+    `3. Post status to your channel`,
     `4. Message parent: "Compacted. State saved."`,
     `On restart: read SOUL.md, MEMORY.md, and today's log first.`,
   ]

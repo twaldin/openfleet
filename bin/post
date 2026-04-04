@@ -1,0 +1,75 @@
+#!/usr/bin/env node
+// openfleet post — remote-agnostic message posting for agents
+// Resolves agent identity, emits agent.post event, bridge routes to configured remote.
+const { execFileSync } = require("child_process")
+const os = require("os")
+const path = require("path")
+const { createEventStore } = require("../core/runtime/events")
+const { loadRemoteConfig, resolveEventRouting } = require("../core/remote/config")
+const { createAdapter } = require("../core/remote/adapter")
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+
+function resolveAgentId() {
+  // 1. Explicit env var
+  if (process.env.OPENFLEET_AGENT_ID) return process.env.OPENFLEET_AGENT_ID
+
+  // 2. tmux window name (agents run in named windows)
+  try {
+    const windowName = execFileSync("tmux", ["display-message", "-p", "#{window_name}"], {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim()
+    if (windowName && windowName !== "bash" && windowName !== "zsh") return windowName
+  } catch {}
+
+  return "unknown"
+}
+
+function main() {
+  const args = process.argv.slice(2)
+  const message = args.filter(a => !a.startsWith("--")).join(" ")
+  const agentId = args.includes("--agent") ? args[args.indexOf("--agent") + 1] : resolveAgentId()
+  const channelOverride = args.includes("--channel") ? args[args.indexOf("--channel") + 1] : null
+
+  if (!message) {
+    console.error("Usage: openfleet post <message> [--agent <name>] [--channel <channel>]")
+    process.exit(1)
+  }
+
+  // Emit event
+  const events = createEventStore(STATE_ROOT)
+  const event = events.append({
+    type: "agent.post",
+    agent_id: agentId,
+    severity: "info",
+    payload: { message, channel: channelOverride },
+  })
+
+  // Direct delivery (when bridge is not running, post synchronously)
+  const config = loadRemoteConfig(STATE_ROOT)
+  const provider = config?.provider
+  if (provider) {
+    const routing = resolveEventRouting(config, "agent.post")
+    if (routing.post) {
+      try {
+        const adapter = createAdapter(provider, config[provider], STATE_ROOT)
+        const channel = channelOverride || routing.channel
+        const formatted = adapter.formatEvent(event)
+        adapter.post(channel, formatted, { agent_id: agentId })
+        adapter.destroy()
+      } catch (e) {
+        console.error(`Warning: direct post failed (${e.message}), event saved for bridge pickup`)
+      }
+    }
+  }
+
+  console.log(JSON.stringify({ ok: true, event_id: event.id, agent: agentId }))
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(e.message)
+  process.exit(1)
+}

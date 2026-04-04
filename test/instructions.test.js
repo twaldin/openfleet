@@ -22,7 +22,7 @@ test("buildAgentInstructions includes OpenFleet commands and playbook for epheme
   // Should have openfleet commands
   assert.match(text, /# OpenFleet Commands/)
   assert.match(text, /node .*\/bin\/send --to-parent --sender test-coder/)
-  assert.match(text, /node .*\/bin\/remote discord post/)
+  assert.match(text, /node .*\/bin\/post/)
   assert.match(text, /## Completion Protocol/)
   assert.match(text, /## Blocker Protocol/)
   assert.match(text, /## Compaction Protocol/)

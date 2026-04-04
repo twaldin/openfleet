@@ -78,6 +78,12 @@ function main() {
   // Dashboard
   tmuxNewWindow("dashboard", `node ${path.join(BIN, "dashboard")}`, STATE_ROOT)
 
+  // Remote bridge (event → provider routing)
+  tmuxNewWindow("bridge", `node ${path.join(BIN, "remote-bridge")}`, STATE_ROOT)
+
+  // Capture daemon (passive agent monitoring)
+  tmuxNewWindow("capture", `node ${path.join(BIN, "capture")}`, STATE_ROOT)
+
   // 3. Launch orchestrator (cairn) in first window if not already there
   if (!skipOrchestrator && !tmuxHasWindow("cairn")) {
     log("cairn: launch Claude Code in the 'cairn' window to start orchestrating")

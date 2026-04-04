@@ -1,0 +1,125 @@
+#!/usr/bin/env node
+// openfleet remote-bridge — tail events.jsonl and route to configured remote provider
+// Long-running process, runs as a tmux window alongside gateway/cron.
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+const { loadRemoteConfig, resolveEventRouting } = require("../core/remote/config")
+const { createAdapter } = require("../core/remote/adapter")
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const EVENTS_PATH = path.join(STATE_ROOT, "events.jsonl")
+const BRIDGE_TYPES = new Set([
+  "agent.post", "agent.error", "agent.blocked", "agent.task_completed",
+  "session.spawned", "session.died", "agent.respawned", "agent.compacted",
+])
+
+let _adapter = null
+let _config = null
+
+function log(msg) { console.log(`[bridge] ${new Date().toISOString().slice(11, 19)} ${msg}`) }
+
+function initAdapter() {
+  _config = loadRemoteConfig(STATE_ROOT)
+  if (!_config?.provider) {
+    log("No remote provider configured in remote.json — bridge idle")
+    return false
+  }
+
+  try {
+    _adapter = createAdapter(_config.provider, _config[_config.provider], STATE_ROOT)
+    log(`Provider: ${_config.provider}`)
+    return true
+  } catch (e) {
+    log(`Failed to init adapter: ${e.message}`)
+    return false
+  }
+}
+
+function processEvent(event) {
+  if (!BRIDGE_TYPES.has(event.type)) return
+  if (!_adapter) return
+
+  const routing = resolveEventRouting(_config, event.type)
+  if (!routing.post) return
+
+  // Skip agent.post events that were already delivered directly by bin/post
+  // (they have adapter.delivered events following them — but for simplicity,
+  // we check if the event is very recent and from the post command)
+  if (event.type === "agent.post" && event.payload?._direct_delivered) return
+
+  const channel = routing.channel
+  const formatted = _adapter.formatEvent(event)
+
+  try {
+    _adapter.post(channel, formatted, {
+      agent_id: event.agent_id,
+      source: event.agent_id,
+    })
+    log(`${event.type} → ${channel} (${event.agent_id || "system"})`)
+  } catch (e) {
+    log(`Failed to post ${event.type}: ${e.message}`)
+  }
+}
+
+function getFileSize(filePath) {
+  try {
+    return fs.statSync(filePath).size
+  } catch {
+    return 0
+  }
+}
+
+function main() {
+  log("Starting remote bridge...")
+
+  if (!initAdapter()) {
+    // Poll for config to appear
+    const configCheck = setInterval(() => {
+      if (initAdapter()) clearInterval(configCheck)
+    }, 30000)
+  }
+
+  // Start tailing from end of file (only process new events)
+  let offset = getFileSize(EVENTS_PATH)
+  let buffer = ""
+
+  function poll() {
+    const currentSize = getFileSize(EVENTS_PATH)
+    if (currentSize <= offset) {
+      if (currentSize < offset) offset = 0 // file was truncated/rotated
+      return
+    }
+
+    const fd = fs.openSync(EVENTS_PATH, "r")
+    const chunk = Buffer.alloc(currentSize - offset)
+    fs.readSync(fd, chunk, 0, chunk.length, offset)
+    fs.closeSync(fd)
+    offset = currentSize
+
+    buffer += chunk.toString("utf8")
+    const lines = buffer.split("\n")
+    buffer = lines.pop() // keep incomplete line in buffer
+
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const event = JSON.parse(line)
+        processEvent(event)
+      } catch {
+        // malformed line, skip
+      }
+    }
+  }
+
+  // Poll every 2 seconds
+  setInterval(poll, 2000)
+  log("Tailing events.jsonl...")
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(`[bridge] Fatal: ${e.message}`)
+  process.exit(1)
+}
