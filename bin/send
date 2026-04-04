@@ -5,11 +5,13 @@ const os = require("os")
 const path = require("path")
 const fs = require("fs")
 const { parseArgs } = require("../lib/opencode")
+const { sendMessage } = require("../core/harness/openclaw")
+const { hashAgentPort } = require("../core/remote/ssh")
 const { loadRegistry } = require("../core/runtime/registry")
 const { loadActiveOrchestrator } = require("../core/runtime/orchestrator")
 const { createEventStore } = require("../core/runtime/events")
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2))
   const stateRoot = args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const direction = args.direction || "parent_to_worker"
@@ -21,7 +23,7 @@ function main() {
       console.error("Usage: send --to-parent --sender <name> --message \"text\"")
       process.exit(1)
     }
-    return sendToParent(stateRoot, message, args.sender)
+    return await sendToParent(stateRoot, message, args.sender)
   }
 
   const target = args._[0]
@@ -36,7 +38,7 @@ function main() {
   // Look up agent in registry
   const orchestrator = loadActiveOrchestrator(stateRoot)
   if (isParentTarget(target, orchestrator)) {
-    return sendToParent(stateRoot, message, args.sender)
+    return await sendToParent(stateRoot, message, args.sender)
   }
 
   const registry = loadRegistry(stateRoot)
@@ -50,23 +52,14 @@ function main() {
     process.exit(1)
   }
 
-  const harness = session.harness || "opencode"
-  const tmuxSession = session.tmux_session
-  const tmuxWindow = session.tmux_window
+  const routed = await routeMessage(session, message, { targetName: target, stateRoot })
 
-  if (harness === "opencode") {
-    // OpenCode: use opencode run --attach to send to the headless server
-    const dir = (session.directory || session.workspace || path.join(stateRoot, "agents", target)).replace(/^~/, os.homedir())
-    const port = session.opencode_port || (14000 + Math.abs([...target].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0) % 1000))
-    sendViaOpencodeRun(dir, message, port, target)
-    console.log(`Sent to ${target} via opencode run --attach :${port}`)
-  } else if (tmuxSession && tmuxWindow && hasTmuxWindow(tmuxSession, tmuxWindow)) {
-    // Claude Code / Codex: use tmux send-keys
-    sendViaTmux(tmuxSession, tmuxWindow, message)
-    console.log(`Sent to ${target} via tmux @ ${tmuxSession}:${tmuxWindow}`)
-  } else {
-    console.error(`Cannot route message to ${target}: no tmux coords or opencode session`)
-    process.exit(1)
+  if (routed.transport === "openclaw") {
+    console.log(`Sent to ${target} via OpenClaw HTTP :${routed.port}`)
+  } else if (routed.transport === "opencode") {
+    console.log(`Sent to ${target} via opencode run --attach :${routed.port}`)
+  } else if (routed.transport === "tmux") {
+    console.log(`Sent to ${target} via tmux @ ${routed.target}`)
   }
 
   // Emit event
@@ -78,7 +71,7 @@ function main() {
   })
 }
 
-function sendToParent(stateRoot, message, sender) {
+async function sendToParent(stateRoot, message, sender) {
   const orchestrator = loadActiveOrchestrator(stateRoot)
   if (!orchestrator) {
     console.error("No active orchestrator registered")
@@ -88,7 +81,14 @@ function sendToParent(stateRoot, message, sender) {
   const label = sender ? `[${sender.toUpperCase()}]: ` : ""
   const fullMessage = `${label}${message}`
 
-  if (orchestrator.harness === "opencode" && orchestrator.session_id) {
+  if (orchestrator.harness === "openclaw") {
+    const port = orchestrator.openclaw_port || hashAgentPort(orchestrator.name || orchestrator.agent_id || "parent")
+    if (!orchestrator.openclaw_token) {
+      console.error("Cannot route to parent: missing OpenClaw auth token")
+      process.exit(1)
+    }
+    await sendMessage(port, orchestrator.openclaw_token, fullMessage)
+  } else if (orchestrator.harness === "opencode" && orchestrator.session_id) {
     const baseUrl = process.env.OPENCODE_URL || "http://127.0.0.1:4096"
     const url = `${baseUrl}/session/${orchestrator.session_id}/prompt_async?directory=${encodeURIComponent(orchestrator.workdir || "")}`
     const payload = JSON.stringify({ parts: [{ type: "text", text: fullMessage }] })
@@ -107,6 +107,41 @@ function sendToParent(stateRoot, message, sender) {
   })
 
   console.log(`Sent to parent (${orchestrator.harness})`)
+}
+
+async function routeMessage(session, message, {
+  targetName = session.name || session.agent_id || session.tmux_window,
+  stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet"),
+  hasTmuxWindowImpl = hasTmuxWindow,
+  sendOpenClawImpl = sendMessage,
+  sendTmuxImpl = sendViaTmux,
+} = {}) {
+  const harness = session.harness || "opencode"
+  const tmuxSession = session.tmux_session
+  const tmuxWindow = session.tmux_window
+
+  if (harness === "openclaw") {
+    const port = session.openclaw_port || hashAgentPort(targetName)
+    if (!session.openclaw_token) {
+      throw new Error(`Cannot route message to ${targetName}: missing OpenClaw auth token`)
+    }
+    await sendOpenClawImpl(port, session.openclaw_token, message)
+    return { transport: "openclaw", port }
+  }
+
+  if (harness === "opencode") {
+    const dir = (session.directory || session.workspace || path.join(stateRoot, "agents", targetName)).replace(/^~/, os.homedir())
+    const port = session.opencode_port || hashAgentPort(targetName)
+    sendViaOpencodeRun(dir, message, port, targetName)
+    return { transport: "opencode", port }
+  }
+
+  if (tmuxSession && tmuxWindow && hasTmuxWindowImpl(tmuxSession, tmuxWindow)) {
+    sendTmuxImpl(tmuxSession, tmuxWindow, message)
+    return { transport: "tmux", target: `${tmuxSession}:${tmuxWindow}` }
+  }
+
+  throw new Error(`Cannot route message to ${targetName}: no tmux coords or harness transport`)
 }
 
 function isParentTarget(target, orchestrator) {
@@ -172,12 +207,10 @@ function hasTmuxWindow(session, window) {
 }
 
 if (require.main === module) {
-  try {
-    main()
-  } catch (e) {
+  main().catch((e) => {
     console.error(e.message)
     process.exit(1)
-  }
+  })
 }
 
 module.exports = {
@@ -185,5 +218,6 @@ module.exports = {
   hasTmuxWindow,
   isParentTarget,
   main,
+  routeMessage,
   sendToParent,
 }
