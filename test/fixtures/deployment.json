@@ -1,0 +1,69 @@
+{
+  "name": "test-fleet",
+  "workspaceRoot": "/tmp/openfleet-test",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 4096,
+    "stateDir": "/tmp/openfleet-test/system/opencode",
+    "logDir": "/tmp/openfleet-test/system/logs"
+  },
+  "parent": {
+    "agent": "orchestrator",
+    "sessionScript": "/tmp/openfleet-test/system/bin/orchestrator_session"
+  },
+  "routing": {
+    "assistant_channel": "channel://orchestrator",
+    "default_human_channel": "channel://orchestrator",
+    "direct_message_policy": "agent-channel-preferred",
+    "server_architecture": {
+      "server_name": "OpenFleet",
+      "status_channel": "channel://fleet-status",
+      "tasks_channel": "channel://tasks",
+      "categories": [
+        {
+          "name": "control-plane",
+          "channels": [
+            "channel://orchestrator",
+            "channel://fleet-status",
+            "channel://tasks",
+            "channel://alerts"
+          ]
+        },
+        {
+          "name": "agents",
+          "channels": [
+            "channel://code-status",
+            "channel://evals",
+            "channel://monitor",
+            "channel://stock-monitor",
+            "channel://trader"
+          ]
+        },
+        {
+          "name": "reports",
+          "channels": [
+            "channel://daily",
+            "channel://investing"
+          ]
+        }
+      ]
+    },
+    "persistent_agent_channels": {
+      "orchestrator": "channel://orchestrator",
+      "coder": "channel://code-status",
+      "coder-gpt": "channel://code-status",
+      "evaluator": "channel://evals",
+      "monitor": "channel://monitor",
+      "stock-monitor": "channel://stock-monitor",
+      "trader": "channel://trader"
+    }
+  },
+  "jobs": {
+    "morning": {
+      "prompt": ["Morning briefing. Check fleet health and post summary to #daily."]
+    },
+    "heartbeat": {
+      "prompt": ["Heartbeat. Check agent health and task status."]
+    }
+  }
+}

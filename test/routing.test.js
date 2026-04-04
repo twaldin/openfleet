@@ -6,9 +6,9 @@ const { loadDeploymentConfig } = require('../core/deployment')
 const { resolveChannelBinding, resolveInboundRoute } = require('../core/routing')
 
 test('deployment exposes persistent agent channel mappings', () => {
-  const deployment = loadDeploymentConfig(path.join(__dirname, '..', 'examples', 'cairn', 'deployment.json'))
+  const deployment = loadDeploymentConfig(path.join(__dirname, 'fixtures', 'deployment.json'))
 
-  assert.equal(deployment.routing.assistant_channel, 'channel://cairn')
+  assert.equal(deployment.routing.assistant_channel, 'channel://orchestrator')
   assert.equal(deployment.routing.persistent_agent_channels.coder, 'channel://code-status')
   assert.equal(deployment.routing.persistent_agent_channels['stock-monitor'], 'channel://stock-monitor')
   assert.equal(deployment.routing.server_architecture.server_name, 'OpenFleet')
@@ -51,12 +51,12 @@ test('resolveInboundRoute sends direct specialist messages to mapped persistent 
 })
 
 test('deployment exposes clean Discord server channel architecture', () => {
-  const deployment = loadDeploymentConfig(path.join(__dirname, '..', 'examples', 'cairn', 'deployment.json'))
+  const deployment = loadDeploymentConfig(path.join(__dirname, 'fixtures', 'deployment.json'))
   const architecture = deployment.routing.server_architecture
 
   assert.equal(architecture.tasks_channel, 'channel://tasks')
   assert.deepEqual(architecture.categories[0].channels, [
-    'channel://cairn',
+    'channel://orchestrator',
     'channel://fleet-status',
     'channel://tasks',
     'channel://alerts',

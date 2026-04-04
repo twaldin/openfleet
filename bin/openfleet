@@ -49,6 +49,7 @@ const commands = {
 
   // Setup
   init: (args) => run("init", args),
+  start: (args) => run("start", args),
 
   // Maintenance
   maintenance: (args) => run("maintenance-loop", args),
@@ -113,6 +114,7 @@ OPERATIONS
 
 SETUP
   init                Interactive setup wizard
+  start               Cold-boot the fleet (tmux + infra + agents)
 
 HELP
   help                Show this help

@@ -1,42 +1,29 @@
 # OpenFleet
 
-Harness-agnostic agent fleet orchestration. One control plane for Claude Code, OpenCode, Codex, and any AI CLI tool.
-
-Run a team of AI agents across different providers and models — Claude Opus for orchestration, GPT for coding, local models for monitoring — all managed through a unified system with Discord as the control panel.
+Harness-agnostic agent fleet orchestration. Run AI agents across Claude Code, OpenCode, Codex, and any CLI tool — managed through one control plane with real-time messaging.
 
 ## Why
 
-- **Not every task deserves your most expensive model.** Use Claude for orchestration, GPT for coding, local 7B for formatting. OpenFleet routes work to the right agent on the right model.
-- **CLI tools are siloed.** Claude Code, OpenCode, and Codex each have their own session model. OpenFleet unifies them into one fleet with shared state, task routing, and observability.
-- **Agent teams need infrastructure.** Spawning, messaging, health checks, worktree isolation, Discord routing, permission handling, cron scheduling — OpenFleet handles the plumbing so agents can focus on work.
+AI CLI tools are siloed. Claude Code, OpenCode, and Codex each have their own session model, communication protocol, and context management. OpenFleet unifies them into one fleet with shared state, cross-harness messaging, task routing, and observability.
+
+Not every task deserves your most expensive model. Use Claude Opus for orchestration, GPT for coding, local 7B models for monitoring. OpenFleet routes work to the right agent on the right model.
 
 ## Quick Start
 
 ```bash
-# Clone and install
 git clone https://github.com/twaldin/openfleet.git
-cd openfleet
-npm install
+cd openfleet && npm install
 
-# Interactive setup
-node bin/init
+# Interactive setup — creates ~/.openfleet/ with all config
+node bin/openfleet init
 
-# Or manual setup
-mkdir -p ~/.openfleet
-cp examples/template-deployment.json ~/.openfleet/deployment.json
-# Edit with your paths and preferences
+# Cold-boot the entire fleet (tmux session + infra + agents)
+node bin/openfleet start
 
-# Check fleet status
+# Or start manually
 node bin/openfleet status
-
-# Spawn an agent
-node bin/openfleet spawn my-coder --harness codex --model gpt-5.4 --dir ~/my-project
-
-# Send it work
+node bin/openfleet spawn my-coder --harness opencode --model gpt-5.4 --dir ~/project
 node bin/openfleet send my-coder "Fix the failing test in src/auth.js"
-
-# Watch the fleet
-node bin/openfleet watch
 ```
 
 ## Architecture
@@ -47,194 +34,191 @@ You (Discord / Terminal)
   v
 Orchestrator (Claude Code / OpenCode / Codex)
   |
-  +-- Discord Gateway (real-time message routing + status boards)
-  +-- Cron Scheduler (heartbeat, market hours, periodic scans)
-  +-- Task Pipeline (create → dispatch → execute → review → merge)
+  +-- Remote Gateway (Discord — real-time message routing + status boards)
+  +-- Cron Scheduler (heartbeat, periodic scans, market hours)
+  +-- Task Pipeline (create -> dispatch -> execute -> review -> merge)
+  +-- Web Dashboard (fleet health, terminal panes, event stream)
   |
-  +-- Agent: coder (OpenCode/GPT-5.4, worktree-isolated)
-  +-- Agent: evaluator (OpenCode/GPT-5.4-mini, code review)
-  +-- Agent: monitor (OpenCode/GPT-5.4-mini, persistent, VPS health)
-  +-- Agent: trader (OpenCode/GPT-5.4, persistent, market analysis)
-  +-- Agent: stock-monitor (OpenCode/local-7B, market hours only)
+  +-- Agent: coder (any harness, worktree-isolated)
+  +-- Agent: evaluator (code review, lightweight model)
+  +-- Agent: monitor (persistent, VPS health checks)
+  +-- Agent: trader (persistent, market analysis)
+  +-- Agent: <any> (spawn on demand)
 ```
 
-### Harness Adapters
+### Harnesses
 
 | Harness | Communication | Best For |
-|---------|--------------|----------|
+|---------|---------------|----------|
 | **Claude Code** | tmux send-keys | Orchestrator, complex reasoning |
 | **OpenCode** | HTTP session API | Workers, programmatic control |
-| **Codex** | tmux send-keys + --full-auto | Interactive coding, GPT-native |
+| **Codex** | tmux send-keys + `--full-auto` | Unattended coding, GPT-native |
 
 ### State Model
 
-All state lives in `~/.openfleet/` as flat JSON files:
+All state lives in `~/.openfleet/` as flat JSON files — no database, no daemon required:
 
-- `registry.json` — agent sessions and metadata
-- `tasks.json` — task lifecycle (created → in-progress → completed)
-- `jobs.json` — dispatched work units
-- `workflows.json` — multi-step pipelines (coder.fix → evaluator.review)
-- `blockers.json` — blocked work awaiting human input
-- `profiles.json` — runtime profiles (harness + model + host combos)
-- `events.jsonl` — append-only event log
-- `orchestrator.json` — active orchestrator identity
+```
+~/.openfleet/
+  agents.json        Agent identities, roles, models, channels
+  registry.json      Live session metadata
+  tasks.json         Task lifecycle (created -> dispatched -> completed)
+  jobs.json          Work units dispatched to agents
+  workflows.json     Multi-step pipelines
+  blockers.json      Work blocked on human input
+  cron.json          Scheduled jobs (prompts, targets, intervals)
+  events.jsonl       Append-only event log
+  agents/            Per-agent workspaces (SOUL.md, MEMORY.md, state)
+```
 
-No database. No daemon required. Everything is file-backed and inspectable.
+### Agent Workspaces
+
+Each agent gets a workspace at `~/.openfleet/agents/<name>/` with:
+- `SOUL.md` — identity, role, capabilities
+- `MEMORY.md` — durable memory across sessions
+- `HEARTBEAT.md` — periodic checklist
+- `state.md` — current operational state
+- `.opencode/` or `.claude/` — harness session data
 
 ## CLI Reference
 
 ```
 openfleet <command> [args...]
 
-STATE
-  status              Fleet dashboard
-  agents              List all agents and health
-  watch               Interactive TUI dashboard
-  lifecycle status    Detailed agent health
-
-AGENTS
-  spawn <name>        Spawn agent (--harness, --model, --worktree)
-  send <agent> <msg>  Message any agent (cross-harness)
-  kill <name>         Stop an agent
-  respawn             Bring dormant persistent agents back
+LIFECYCLE
+  start               Cold-boot fleet (tmux + gateway + cron + dashboard + agents)
+  init                Interactive setup wizard
+  respawn             Bring dormant persistent agents back online
   compact <agent>     Save agent state for context reset
 
+STATE
+  status              Fleet dashboard
+  lifecycle status    Detailed agent health
+  watch               Interactive TUI dashboard
+
+AGENTS
+  spawn <name>        Spawn agent (--harness, --model, --dir, --worktree)
+  send <agent> <msg>  Message any agent (cross-harness)
+  kill <name>         Stop an agent
+  attach <name>       Connect to agent tmux window
+
 TASKS
-  task create         Create a task
-  task list           List tasks
-  dispatch            Dispatch job to an agent
-  complete <job-id>   Report job completion
+  task create|list|update   Task lifecycle
+  dispatch                  Dispatch job to agent
+  complete <job-id>         Report job completion
 
-FLEET
-  cron --list         Show scheduled tasks
+COMMUNICATION
+  discord post              Post to Discord channel
+  remote <subcommand>       Remote operations
+
+SCHEDULING
+  cron --list         Show scheduled jobs
   cron                Start cron scheduler
-  gateway             Start Discord gateway
-  merge <name>        Merge worktree branch after review
 
-DISCORD
-  discord post        Post to a Discord channel
-  poll                Poll Discord for messages
+OPERATIONS
+  gateway             Start Discord gateway
+  web-dashboard       Web dashboard (default :3000)
+  maintenance         Run maintenance loop
+  reconcile           Reconcile fleet state
 ```
 
-## Discord Integration
+## Remote Messaging
 
-OpenFleet includes a real-time Discord gateway (ported from [claudecord](https://github.com/twaldin/claudecord)):
+OpenFleet uses a remote gateway for real-time communication between you and the fleet. Currently supports Discord:
 
-- **Inbound:** Discord messages route to agents in real-time via WebSocket gateway
-- **Outbound:** Agents post to their Discord channels
-- **Status boards:** Auto-updating embeds showing fleet health, tasks, and blockers
-- **Read receipts:** Messages get a reaction when delivered
-- **Permission watcher:** Agent permission prompts surface as Discord embeds with reaction-based approve/deny
-- **Threads:** Ephemeral agents get Discord threads for isolated discussion
+- **Inbound:** Messages route from Discord channels to agents in real-time
+- **Outbound:** Agents post to their assigned Discord channels
+- **Status boards:** Auto-updating embeds showing fleet health
+- **Approval flow:** Permission prompts surface as embeds with reaction-based approve/deny
+- **Read receipts:** Delivered messages get a reaction
 
-### Setup
-
-1. Create a Discord bot at [discord.com/developers](https://discord.com/developers/applications)
-2. Enable MESSAGE_CONTENT intent in Bot settings
-3. Invite bot to your server with admin permissions
-4. Run `openfleet init` and enter your bot token
+Agents communicate outbound via `openfleet remote discord post --channel <channel> --message "..."`.
 
 ## Worktree Isolation
 
-When spawning coding agents, use `--worktree` to give each agent its own git branch:
+Coding agents can get their own git branch for safe parallel work:
 
 ```bash
-# Agent works on isolated branch
 openfleet spawn fix-auth --harness codex --model gpt-5.4 --dir ~/project --worktree
-
-# After agent completes, merge with test validation
-openfleet merge fix-auth
+openfleet merge fix-auth   # runs test suite before merging
 ```
 
-`merge` runs the full test suite before merging. If tests fail, the merge is rejected.
+## Instruction Projection
 
-## Agent Instruction Projection
-
-OpenFleet automatically writes agent instructions in the right format for each harness:
+OpenFleet writes agent instructions in the right format per harness:
 
 | Harness | File | Format |
 |---------|------|--------|
-| Claude Code | `CLAUDE.md` | Markdown with openfleet section |
+| Claude Code | `CLAUDE.md` | Markdown with OpenFleet section |
 | OpenCode | `.opencode/agents/<name>.md` | Agent config with frontmatter |
-| Codex | `AGENTS.md` | Markdown with openfleet section |
+| Codex | `AGENTS.md` | Markdown with OpenFleet section |
 
-Instructions include: agent identity, role playbook, Discord channels, completion protocol, blocker protocol, and all openfleet CLI commands.
-
-## Runtime Profiles
-
-Define available harness + model combinations in `profiles.json`:
-
-```json
-{
-  "profiles": {
-    "claude-opus-orchestrator": {
-      "harness": "claude-code",
-      "model": "opus-4.6",
-      "role": "orchestrator",
-      "cost_class": "high"
-    },
-    "opencode-gpt54-coder": {
-      "harness": "opencode",
-      "model": "gpt-5.4",
-      "role": "coder",
-      "cost_class": "high"
-    },
-    "opencode-local-monitor": {
-      "harness": "opencode",
-      "model": "qwen2.5-coder:32b",
-      "role": "monitor",
-      "cost_class": "local"
-    }
-  }
-}
-```
-
-OpenFleet selects profiles based on role, cost preference, and rate-limit status. When one provider is rate-limited, work automatically routes to an available alternative.
-
-## Development
-
-```bash
-# Run tests
-npm test
-
-# Run a specific test
-node --test test/routing.test.js
-
-# Check fleet status
-node bin/openfleet status
-
-# Start everything (gateway + cron + orchestrator)
-node bin/openfleet gateway &
-node bin/openfleet cron &
-```
+Instructions include identity, role playbook, Discord channels, completion protocol, blocker protocol, and all CLI commands the agent needs.
 
 ## Project Structure
 
 ```
-bin/                    CLI scripts
-  openfleet             Unified CLI entrypoint
+bin/                    CLI entry points (24 scripts)
+  openfleet             Unified CLI
+  start                 Cold-boot script
   init                  Setup wizard
-  spawn                 Agent spawner (any harness)
-  send                  Universal message routing
-  merge-worker          Worktree merge with test validation
-  discord-gateway       Real-time Discord bot + MCP server
+  spawn                 Harness-agnostic agent spawner
+  send                  Cross-harness message routing
+  discord-gateway       Real-time Discord bot
   cron                  Scheduled task runner
-  agent-lifecycle       Fleet health management
+  agent-lifecycle       Health checks, respawn, compact
+  dashboard             Web UI server
   ...
 
 core/                   Runtime modules
-  runtime/              State management (tasks, jobs, workflows, etc.)
-  harness/              Harness adapters (claude-code, opencode, codex)
-  remote/               Discord adapter
-  instructions.js       Agent instruction projection
+  runtime/              State management (13 modules)
+  harness/              Harness adapters
+  remote/               Remote messaging adapters
+  routing.js            Channel binding + message routing
   dispatch.js           Job dispatch + profile selection
-  execute.js            Job execution routing
-  continuation.js       Continue/wait/stop decisions
-  ops.js                Observability surfaces
+  instructions.js       Agent instruction projection
+  ops.js                Observability + dashboards
   ...
 
-examples/               Example configurations
-test/                   65 tests
+internal/               28 internal service scripts
+lib/                    Shared utilities
+test/                   70 tests
+```
+
+## Roadmap
+
+### Planned Harnesses
+- **Aider** — Model-agnostic CLI, `--message` + `--yes-always` for unattended operation. Trivial tmux integration.
+- **Gemini CLI** — Google's Claude Code competitor. Same tmux send-keys pattern. Gets Gemini models natively.
+- **Goose** — Block's MCP-native CLI. Headless mode via `goose run --text "..."`.
+- **Amazon Q CLI** — AWS-integrated agent. Useful for infrastructure-heavy work.
+
+### Planned Models
+- Gemini 2.5 Pro/Flash (via Gemini CLI or API)
+- Llama 4 Maverick/Scout (via cloud endpoints or Ollama)
+- DeepSeek V3 (budget cloud coder, OpenAI-compatible API)
+- Mistral Large / Codestral (via Mistral API)
+- Qwen 2.5 Coder 32B (local via Ollama)
+
+### Planned Remote Interfaces
+- **Telegram** �� Bot API, simple polling or webhooks. Best mobile experience.
+- **Slack** — Bolt SDK, Socket Mode. For team environments.
+- **SMS/Twilio** — Critical alert escalation.
+- **Webhooks** — ntfy.sh, Pushover for lightweight push notifications.
+- **Email** — Daily briefings and summaries via SMTP/Gmail API.
+- **Nginx reverse proxy** — Expose web dashboard securely for remote access.
+
+### Infrastructure
+- Docker containerization for portable deployments
+- Multi-host support (remote VPS agents via SSH)
+- Nginx-proxied dashboard for mobile/remote access
+
+## Development
+
+```bash
+npm test          # 70 tests
+npm test -- --watch   # watch mode
+node bin/openfleet status   # verify fleet
 ```
 
 ## License

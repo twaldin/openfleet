@@ -1,0 +1,118 @@
+#!/usr/bin/env node
+// openfleet start — cold-boot the entire fleet from zero
+// Creates tmux session, starts infrastructure (gateway, cron, dashboard),
+// launches orchestrator, and respawns persistent agents.
+const { execFileSync, execSync } = require("child_process")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
+const OPENFLEET_SRC = path.resolve(__dirname, "..")
+const BIN = __dirname
+const TMUX_SESSION = "openfleet"
+const ORCHESTRATOR_DIR = path.join(STATE_ROOT, "agents", "cairn")
+
+function log(msg) { console.log(`[openfleet] ${msg}`) }
+function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
+
+function tmuxHasSession() {
+  try {
+    execFileSync("tmux", ["has-session", "-t", TMUX_SESSION], { stdio: "ignore" })
+    return true
+  } catch { return false }
+}
+
+function tmuxHasWindow(name) {
+  try {
+    const wins = execFileSync("tmux", [
+      "list-windows", "-t", TMUX_SESSION, "-F", "#{window_name}",
+    ], { encoding: "utf8" })
+    return wins.split("\n").includes(name)
+  } catch { return false }
+}
+
+function tmuxNewWindow(name, cmd, cwd) {
+  if (tmuxHasWindow(name)) {
+    log(`${name}: already running, skipping`)
+    return
+  }
+  const args = ["new-window", "-t", TMUX_SESSION, "-n", name]
+  if (cwd) args.push("-c", cwd)
+  if (cmd) args.push(cmd)
+  execFileSync("tmux", args, { stdio: "ignore", shell: !!cmd })
+  log(`${name}: started`)
+}
+
+function loadAgentsConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(STATE_ROOT, "agents.json"), "utf8")).agents || {}
+  } catch { return {} }
+}
+
+function main() {
+  const args = process.argv.slice(2)
+  const skipOrchestrator = args.includes("--no-orchestrator")
+  const skipAgents = args.includes("--no-agents")
+  const dryRun = args.includes("--dry-run")
+
+  log("Starting OpenFleet...")
+
+  // 1. Create tmux session if it doesn't exist
+  if (!tmuxHasSession()) {
+    log("Creating tmux session...")
+    execFileSync("tmux", [
+      "new-session", "-d", "-s", TMUX_SESSION, "-n", "cairn", "-c", ORCHESTRATOR_DIR,
+    ], { stdio: "ignore" })
+  } else {
+    log("tmux session exists")
+  }
+
+  // 2. Start infrastructure windows
+  // Gateway (Discord bot)
+  tmuxNewWindow("gateway", `node ${path.join(BIN, "discord-gateway")}`, STATE_ROOT)
+
+  // Cron scheduler
+  tmuxNewWindow("cron", `node ${path.join(BIN, "cron")}`, STATE_ROOT)
+
+  // Dashboard
+  tmuxNewWindow("dashboard", `node ${path.join(BIN, "dashboard")}`, STATE_ROOT)
+
+  // 3. Launch orchestrator (cairn) in first window if not already there
+  if (!skipOrchestrator && !tmuxHasWindow("cairn")) {
+    log("cairn: launch Claude Code in the 'cairn' window to start orchestrating")
+  }
+
+  // 4. Respawn persistent agents
+  if (!skipAgents) {
+    log("Respawning persistent agents...")
+    try {
+      execFileSync("node", [path.join(BIN, "agent-lifecycle"), "respawn"], {
+        stdio: "inherit",
+        env: { ...process.env, OPENFLEET_CANONICAL_STATE_DIR: STATE_ROOT },
+      })
+    } catch (e) {
+      log(`Warning: agent respawn had issues — ${e.message}`)
+    }
+  }
+
+  // 5. Summary
+  log("")
+  log("Fleet started. Windows:")
+  try {
+    const wins = execFileSync("tmux", [
+      "list-windows", "-t", TMUX_SESSION, "-F", "  #{window_index}: #{window_name}",
+    ], { encoding: "utf8" })
+    console.log(wins.trimEnd())
+  } catch {}
+
+  log("")
+  log(`Attach with: tmux attach -t ${TMUX_SESSION}`)
+}
+
+try {
+  main()
+} catch (e) {
+  console.error(`[openfleet] Fatal: ${e.message}`)
+  process.exit(1)
+}

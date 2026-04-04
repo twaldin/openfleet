@@ -12,7 +12,7 @@ function tempDir() {
 }
 
 function loadExampleDeployment() {
-  return loadDeploymentConfig(path.join(__dirname, "..", "examples", "cairn", "deployment.json"))
+  return loadDeploymentConfig(path.join(__dirname, "fixtures", "deployment.json"))
 }
 
 test("buildAgentInstructions includes OpenFleet commands and playbook for ephemeral agent", () => {
