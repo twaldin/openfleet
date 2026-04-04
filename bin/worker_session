@@ -6,7 +6,7 @@ const { parseArgs, ensureOpencodeServer, loadCachedSessionId, request } = requir
 const { loadSessionMetadata, saveSessionMetadata } = require("../core/runtime/session")
 const { createEventStore } = require("../core/runtime/events")
 
-const defaultWorkspaceRoot = os.homedir()
+const defaultWorkspaceRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
