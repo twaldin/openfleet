@@ -11,6 +11,7 @@ const { loadRegistry, saveRegistry, upsertSession } = require("../core/runtime/r
 const { createEventStore } = require("../core/runtime/events")
 const {
   buildHarnessLaunchCommand,
+  buildRemoteMkdirCommand,
   buildRemoteTmuxCaptureCommand,
   buildRemoteTmuxSendCommand,
   buildRemoteTmuxSpawnCommand,
@@ -73,7 +74,7 @@ async function main() {
       hostsFile: hostsPath,
     })
 
-    runSshCommand(host, `mkdir -p '${remoteWorkdir}'`, { timeout: 30000, stdio: "ignore" })
+    runSshCommand(host, buildRemoteMkdirCommand(remoteWorkdir), { timeout: 30000, stdio: "ignore" })
     rsyncDirectory(host, workdir, remoteWorkdir)
 
     const remoteLaunch = buildHarnessLaunchCommand({

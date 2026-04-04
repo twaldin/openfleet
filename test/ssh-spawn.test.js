@@ -6,11 +6,13 @@ const path = require("node:path")
 
 const {
   buildRemoteTmuxSpawnCommand,
+  buildRemoteMkdirCommand,
   buildHarnessLaunchCommand,
   checkRemoteDependencies,
   hostsFilePath,
   loadHosts,
 } = require("../core/remote/ssh")
+const { isAlive } = require("../bin/agent-lifecycle")
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openfleet-ssh-spawn-"))
@@ -92,4 +94,37 @@ test("buildRemoteTmuxSpawnCommand creates remote tmux bootstrap command", () => 
   assert.match(command, /tmux kill-window -t 'openfleet:ssh-coder'/)
   assert.match(command, /tmux new-window -t 'openfleet' -n 'ssh-coder'/)
   assert.match(command, /claude --dangerously-skip-permissions --model opus-4\.6/)
+})
+
+test("buildRemoteMkdirCommand safely quotes remote-dir paths with spaces and quotes", () => {
+  const command = buildRemoteMkdirCommand("~/OpenFleet Workers/agent's dir")
+
+  assert.equal(command, "mkdir -p '~/OpenFleet Workers/agent'\\''s dir'")
+})
+
+test("isAlive returns false for remote SSH failure without falling back to local tmux", () => {
+  let localChecks = 0
+
+  const alive = isAlive({
+    host: "thinkpad-1",
+    tmux_session: "openfleet",
+    tmux_window: "ssh-coder",
+  }, {
+    getHostImpl() {
+      return { ip: "100.100.96.7", user: "twaldin" }
+    },
+    hostsFilePathImpl() {
+      return "/tmp/hosts.json"
+    },
+    runSshCommandImpl() {
+      throw new Error("ssh timeout")
+    },
+    execImpl() {
+      localChecks += 1
+      return "ssh-coder\n"
+    },
+  })
+
+  assert.equal(alive, false)
+  assert.equal(localChecks, 0)
 })

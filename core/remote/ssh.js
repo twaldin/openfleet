@@ -166,11 +166,15 @@ function resolveRemoteWorkdir(name) {
 function buildRemoteTmuxSpawnCommand({ tmuxSession = DEFAULT_TMUX_SESSION, windowName, workdir, launchCommand }) {
   const target = `${tmuxSession}:${windowName}`
   return [
-    `mkdir -p ${shellQuote(workdir)}`,
+    buildRemoteMkdirCommand(workdir),
     `tmux has-session -t ${shellQuote(tmuxSession)} 2>/dev/null || tmux new-session -d -s ${shellQuote(tmuxSession)} -n bootstrap`,
     `tmux kill-window -t ${shellQuote(target)} 2>/dev/null || true`,
     `tmux new-window -t ${shellQuote(tmuxSession)} -n ${shellQuote(windowName)} -c ${shellQuote(workdir)} ${shellQuote(launchCommand)}`,
   ].join(" && ")
+}
+
+function buildRemoteMkdirCommand(workdir) {
+  return `mkdir -p ${shellQuote(workdir)}`
 }
 
 function buildRemoteTmuxSendCommand({ tmuxSession = DEFAULT_TMUX_SESSION, windowName, message }) {
@@ -213,7 +217,7 @@ function buildRsyncArgs(host, localDir, remoteDir) {
     "-e",
     sshBits.join(" "),
     ensureTrailingSlash(localDir),
-    `${buildSshTarget(host)}:${ensureTrailingSlash(remoteDir)}`,
+    `${buildSshTarget(host)}:${shellQuote(ensureTrailingSlash(remoteDir))}`,
   ]
 }
 
@@ -337,6 +341,7 @@ module.exports = {
   BASE_REMOTE_DEPENDENCIES,
   buildDependencyCheckCommand,
   buildHarnessLaunchCommand,
+  buildRemoteMkdirCommand,
   buildRemoteTmuxCaptureCommand,
   buildRemoteTmuxHasSessionCommand,
   buildRemoteTmuxSendCommand,
