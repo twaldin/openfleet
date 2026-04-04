@@ -90,24 +90,13 @@ function main() {
   }
 
   // Send bootstrap prompt if provided
+  // Always use tmux for initial bootstrap — the session doesn't exist until
+  // the first message is typed into the TUI. HTTP API only works after that.
   if (bootstrap) {
     if (harness === "opencode") {
-      // OpenCode: use HTTP session API instead of tmux send-keys (more reliable)
-      sleep(5000) // Extra wait for OpenCode TUI + server
-      try {
-        execFileSync("node", [
-          path.join(__dirname, "message_agent"), name,
-          "--agent", name,
-          "--canonical-state-dir", stateRoot,
-          bootstrap,
-        ], { encoding: "utf8", timeout: 30000 })
-      } catch (e) {
-        console.error(`Warning: bootstrap via session API failed, falling back to tmux: ${e.message}`)
-        sendToPane(tmuxSession, name, bootstrap)
-      }
-    } else {
-      sendToPane(tmuxSession, name, bootstrap)
+      sleep(5000) // Extra wait for OpenCode TUI to fully initialize
     }
+    sendToPane(tmuxSession, name, bootstrap)
   }
 
   // Register in openfleet registry
