@@ -1,8 +1,0 @@
-{
-  "capabilities": {
-    "code-review-skill": "skills/code-review-skill.json",
-    "filesystem-mcp": "mcp/filesystem-mcp.json",
-    "guarded-commands-hook": "hooks/guarded-commands-hook.json",
-    "workspace-write": "permissions/workspace-write.json"
-  }
-}

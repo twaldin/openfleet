@@ -1,7 +1,7 @@
 const fs = require("fs")
 const path = require("path")
 const os = require("os")
-const { loadCapability, writeCapabilityProjection } = require("./capabilities")
+const { buildSkillIndex, projectAllSkills } = require("./skills")
 const { getPlaybook } = require("./playbooks")
 const { resolveChannelBinding } = require("./routing")
 const { getAgent } = require("./runtime/agents")
@@ -114,11 +114,15 @@ function projectInstructions(agent, role, harness, workdir, deployment, options 
   if (!harness) throw new Error("harness is required")
   if (!workdir) throw new Error("workdir is required")
 
-  const instructions = buildAgentInstructions(agent, role, deployment, options)
   const resolvedWorkdir = path.resolve(workdir)
-  const targetPath = projectBaseInstructions(agent, harness, resolvedWorkdir, instructions)
+  const projectedSkills = projectAgentSkills(agent, harness, resolvedWorkdir, options)
 
-  projectAgentCapabilities(agent, harness, resolvedWorkdir, options)
+  let instructions = buildAgentInstructions(agent, role, deployment, options)
+  if (!hasNativeSkillDiscovery(harness) && projectedSkills.length > 0) {
+    instructions = `${instructions}\n\n${buildSkillIndex(projectedSkills)}`
+  }
+
+  const targetPath = projectBaseInstructions(agent, harness, resolvedWorkdir, instructions)
   return targetPath
 }
 
@@ -159,41 +163,20 @@ function projectBaseInstructions(agent, harness, workdir, instructions) {
   return targetPath
 }
 
-function projectAgentCapabilities(agent, harness, workdir, options = {}) {
-  const capabilityNames = getAgentCapabilityNames(agent, options)
-  if (capabilityNames.length === 0) return []
-
-  const writtenPaths = []
-
-  for (const capabilityName of capabilityNames) {
-    let capability
-    try {
-      capability = loadCapability(capabilityName, options)
-    } catch (error) {
-      if (error && /Capability not found:/.test(error.message)) {
-        console.warn(`Skipping capability ${capabilityName} for agent ${agent}: capability is not defined in the library`)
-        continue
-      }
-
-      throw error
-    }
-
-    const targetPath = writeCapabilityProjection(capability, harness, workdir)
-    if (!targetPath) {
-      console.warn(`Skipping capability ${capability.name} for harness ${harness}: projection is not defined`)
-      continue
-    }
-
-    writtenPaths.push(targetPath)
-  }
-
-  return writtenPaths
+function projectAgentSkills(agent, harness, workdir, options = {}) {
+  const skillNames = getAgentSkillNames(agent, options)
+  if (skillNames.length === 0) return []
+  return projectAllSkills(skillNames, harness, workdir, options.skillsRoot)
 }
 
-function getAgentCapabilityNames(agent, options = {}) {
+function getAgentSkillNames(agent, options = {}) {
   const stateRoot = options.stateRoot || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
   const agentRecord = getAgent(stateRoot, agent)
-  return Array.isArray(agentRecord?.capabilities) ? agentRecord.capabilities : []
+  return Array.isArray(agentRecord?.skills) ? agentRecord.skills : []
+}
+
+function hasNativeSkillDiscovery(harness) {
+  return harness === "claude-code" || harness === "opencode" || harness === "openclaw" || harness === "codex"
 }
 
 function writeProjectedSection(targetPath, instructions) {
@@ -241,8 +224,9 @@ function escapeRegex(value) {
 module.exports = {
   buildAgentInstructions,
   buildOpenFleetCommands,
-  getAgentCapabilityNames,
+  getAgentSkillNames,
+  hasNativeSkillDiscovery,
   projectInstructions,
-  projectAgentCapabilities,
+  projectAgentSkills,
   readWorkspaceFile,
 }

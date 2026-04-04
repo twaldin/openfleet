@@ -37,6 +37,7 @@ async function main() {
   const useWorktree = args.worktree || false
   const baseBranch = args["base-branch"] || "main"
   const deploymentPath = process.env.OPENFLEET_DEPLOYMENT || null
+  let deployment = null
 
   if (!name) {
     console.error("Usage: spawn <name> --harness <claude-code|codex|opencode> --model <model> [--dir <workdir>] [--worktree] [--host <hostname>] [--bootstrap <prompt>]")
@@ -52,12 +53,13 @@ async function main() {
 
   if (deploymentPath) {
     try {
-      const deployment = loadDeploymentConfig(deploymentPath)
-      if (deployment) {
-        projectInstructions(name, name, harness, workdir, deployment)
-      }
-    } catch {}
+      deployment = loadDeploymentConfig(deploymentPath)
+    } catch (error) {
+      console.warn(`Warning: failed to load deployment config ${deploymentPath}: ${error.message}`)
+    }
   }
+
+  projectInstructions(name, name, harness, workdir, deployment, { stateRoot })
 
   const launch = buildHarnessLaunchCommand({ harness, model, workdir, name })
   let opencodePort = launch.opencodePort
