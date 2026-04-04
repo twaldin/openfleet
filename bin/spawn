@@ -58,6 +58,7 @@ function main() {
 
   // Launch the right CLI
   let launchCmd
+  let opencodePort = null
   switch (harness) {
     case "claude-code":
       launchCmd = `claude --dangerously-skip-permissions --model ${model}`
@@ -66,7 +67,9 @@ function main() {
       launchCmd = `codex -m ${model} -C ${workdir} --full-auto`
       break
     case "opencode":
-      launchCmd = `opencode`
+      // Headless server — deterministic port from agent name hash
+      opencodePort = 14000 + Math.abs([...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0) % 1000)
+      launchCmd = `opencode serve --port ${opencodePort} --print-logs`
       break
     default:
       console.error(`Unknown harness: ${harness}`)
@@ -78,7 +81,7 @@ function main() {
   ], { stdio: "ignore", shell: true })
 
   // Wait for CLI to initialize
-  sleep(3000)
+  sleep(harness === "opencode" ? 5000 : 3000)
 
   // Handle Codex trust prompt
   if (harness === "codex") {
@@ -89,14 +92,23 @@ function main() {
     }
   }
 
-  // Send bootstrap prompt if provided
-  // Always use tmux for initial bootstrap — the session doesn't exist until
-  // the first message is typed into the TUI. HTTP API only works after that.
+  // Send bootstrap prompt
   if (bootstrap) {
-    if (harness === "opencode") {
-      sleep(5000) // Extra wait for OpenCode TUI to fully initialize
+    if (harness === "opencode" && opencodePort) {
+      // OpenCode headless: use opencode run --attach to send to the server
+      try {
+        execFileSync("opencode", [
+          "run", "--attach", `http://127.0.0.1:${opencodePort}`,
+          "--dir", workdir, "--agent", name,
+          "-m", `openai/${model}`,
+          bootstrap,
+        ], { encoding: "utf8", timeout: 120000, stdio: "pipe" })
+      } catch (e) {
+        console.error(`Warning: bootstrap via opencode run failed: ${e.message}`)
+      }
+    } else {
+      sendToPane(tmuxSession, name, bootstrap)
     }
-    sendToPane(tmuxSession, name, bootstrap)
   }
 
   // Register in openfleet registry
@@ -115,6 +127,7 @@ function main() {
     agentProfile: name,
     workspace: workdir,
     worktree: worktreeInfo,
+    opencode_port: opencodePort || null,
     created_at: Date.now(),
   })
   saveRegistry(stateRoot, registry)

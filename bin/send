@@ -50,10 +50,11 @@ function main() {
   const tmuxWindow = session.tmux_window
 
   if (harness === "opencode") {
-    // OpenCode: always use opencode run --continue (tmux send-keys doesn't work with the TUI)
+    // OpenCode: use opencode run --attach to send to the headless server
     const dir = (session.directory || session.workspace || path.join(stateRoot, "agents", target)).replace(/^~/, os.homedir())
-    sendViaOpencodeRun(dir, message)
-    console.log(`Sent to ${target} via opencode run --continue --dir ${dir}`)
+    const port = session.opencode_port || (14000 + Math.abs([...target].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0) % 1000))
+    sendViaOpencodeRun(dir, message, port, target)
+    console.log(`Sent to ${target} via opencode run --attach :${port}`)
   } else if (tmuxSession && tmuxWindow && hasTmuxWindow(tmuxSession, tmuxWindow)) {
     // Claude Code / Codex: use tmux send-keys
     sendViaTmux(tmuxSession, tmuxWindow, message)
@@ -135,10 +136,13 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
-function sendViaOpencodeRun(dir, message) {
-  execFileSync("opencode", ["run", "--continue", "--dir", dir, message], {
+function sendViaOpencodeRun(dir, message, port, agentName) {
+  const args = ["run", "--attach", `http://127.0.0.1:${port}`, "--dir", dir]
+  if (agentName) args.push("--agent", agentName)
+  args.push(message)
+  execFileSync("opencode", args, {
     encoding: "utf8",
-    timeout: 30000,
+    timeout: 120000,
     stdio: "pipe",
   })
 }
