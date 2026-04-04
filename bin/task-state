@@ -117,6 +117,7 @@ function main() {
         question: args.question,
         blocked_on_type: args.type,
         blocked_on_id: args.on,
+        escalated: parseBoolean(args.escalated),
         urgency: args.urgency,
         channel_binding: args.channel || (parentTask?.channel_binding || null),
       })
@@ -138,10 +139,12 @@ function main() {
       return print(blocker)
     }
     if (command === "update") {
-      const blocker = updateBlocker(stateRoot, id, {
+      const blocker = updateBlocker(stateRoot, id, definedFields({
         status: args.status,
+        blocked_on_type: args.type,
         blocked_on_id: args.on,
-      })
+        escalated: parseBoolean(args.escalated),
+      }))
       eventStore.append({ type: "blocker.updated", agent_id: blocker.agent_id || "openfleet", payload: blocker })
       return print(blocker)
     }
@@ -226,6 +229,17 @@ function main() {
 function parseJson(value) {
   if (!value) return null
   return JSON.parse(value)
+}
+
+function parseBoolean(value) {
+  if (value == null) return undefined
+  if (value === true || value === "true") return true
+  if (value === false || value === "false") return false
+  throw new Error(`Invalid boolean: ${value}`)
+}
+
+function definedFields(input) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined))
 }
 
 function print(value) {
