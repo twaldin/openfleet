@@ -23,7 +23,7 @@ test("package.json exposes npm publish metadata for openfleet", () => {
   assert.deepEqual(pkg.bugs, {
     url: "https://github.com/twaldin/openfleet/issues",
   })
-  assert.deepEqual(pkg.engines, { node: ">=20" })
+  assert.deepEqual(pkg.engines, { node: ">=18" })
 })
 
 test("bin/openfleet is a node executable", () => {
