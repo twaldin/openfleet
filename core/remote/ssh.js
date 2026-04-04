@@ -143,20 +143,22 @@ function hashAgentPort(name) {
 }
 
 function buildHarnessLaunchCommand({ harness, model, workdir, name, token = null }) {
+  const identityEnv = `OPENFLEET_AGENT_NAME=${shellQuote(name)} AGENT_NAME=${shellQuote(name)}`
+
   switch (harness) {
     case "claude-code":
-      return { command: `claude --dangerously-skip-permissions --model ${model}`, opencodePort: null }
+      return { command: `${identityEnv} claude --dangerously-skip-permissions --model ${model}`, opencodePort: null }
     case "codex":
-      return { command: `codex -m ${model} -C ${shellQuote(workdir)} --full-auto`, opencodePort: null }
+      return { command: `${identityEnv} codex -m ${model} -C ${shellQuote(workdir)} --full-auto`, opencodePort: null }
     case "opencode": {
       const opencodePort = hashAgentPort(name)
       const inner = `opencode serve --port ${opencodePort} & sleep 4; opencode attach http://127.0.0.1:${opencodePort} --dir ${shellQuote(workdir)}`
-      return { command: `bash -c ${shellQuote(inner)}`, opencodePort }
+      return { command: `${identityEnv} bash -c ${shellQuote(inner)}`, opencodePort }
     }
     case "openclaw": {
       const openclawPort = hashAgentPort(name)
       return {
-        command: buildOpenClawSpawnCommand(name, model, openclawPort, workdir, token),
+        command: `${identityEnv} ${buildOpenClawSpawnCommand(name, model, openclawPort, workdir, token)}`,
         openclawPort,
       }
     }

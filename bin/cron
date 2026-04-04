@@ -74,7 +74,7 @@ function evaluateCondition(condition, { stateRoot }) {
   throw new Error(`Unknown cron condition type: ${type || "<missing>"}`)
 }
 
-function executeJob(job) {
+function executeJob(job, { binDir = BIN, runImpl = run } = {}) {
   const target = job.target
   const prompt = job.prompt
 
@@ -86,9 +86,9 @@ function executeJob(job) {
   log(`Firing: ${job.id} → ${target}`)
 
   if (target === "parent" || target === "orchestrator") {
-    run("node", [path.join(BIN, "send"), "--to-parent", "--sender", "cron", "--message", prompt])
+    runImpl("node", [path.join(binDir, "send"), "--to-parent", "--sender", "cron", "--message", prompt])
   } else {
-    run("node", [path.join(BIN, "send"), target, "--message", prompt])
+    runImpl("node", [path.join(binDir, "send"), target, "--sender", "cron", "--message", prompt])
   }
 }
 
