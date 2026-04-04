@@ -138,39 +138,16 @@ function sleep(ms) {
 
 function sendViaOpencodeRun(dir, message, port, agentName) {
   const baseUrl = `http://127.0.0.1:${port}`
-
-  // Get the latest session for this directory
-  let sessionId = null
-  try {
-    const raw = execFileSync("curl", ["-sS", "--max-time", "3", `${baseUrl}/session`], { encoding: "utf8" })
-    const sessions = JSON.parse(raw)
-    // Find most recent session in this directory
-    const match = sessions
-      .filter(s => !s.time?.archived)
-      .sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))[0]
-    if (match) sessionId = match.id
-  } catch {}
-
-  if (sessionId) {
-    // Use prompt_async — queues properly even if agent is busy
-    execFileSync("curl", [
-      "-sS", "--max-time", "5", "-X", "POST",
-      `${baseUrl}/session/${sessionId}/prompt_async`,
-      "-H", "Content-Type: application/json",
-      "-d", JSON.stringify({ parts: [{ type: "text", text: message }] }),
-    ], { encoding: "utf8" })
-  } else {
-    // Fallback: TUI API (only works when agent is idle)
-    execFileSync("curl", [
-      "-sS", "-X", "POST", `${baseUrl}/tui/append-prompt`,
-      "-H", "Content-Type: application/json",
-      "-d", JSON.stringify({ text: message }),
-    ], { encoding: "utf8", timeout: 5000 })
-    sleep(500)
-    execFileSync("curl", [
-      "-sS", "-X", "POST", `${baseUrl}/tui/submit-prompt`,
-    ], { encoding: "utf8", timeout: 5000 })
-  }
+  // TUI API: append text to prompt input, then submit — works while busy too
+  execFileSync("curl", [
+    "-sS", "--max-time", "5", "-X", "POST", `${baseUrl}/tui/append-prompt`,
+    "-H", "Content-Type: application/json",
+    "-d", JSON.stringify({ text: message }),
+  ], { encoding: "utf8" })
+  sleep(1000)
+  execFileSync("curl", [
+    "-sS", "--max-time", "5", "-X", "POST", `${baseUrl}/tui/submit-prompt`,
+  ], { encoding: "utf8" })
 }
 
 function hasTmuxWindow(session, window) {
