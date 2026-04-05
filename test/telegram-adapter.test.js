@@ -178,6 +178,17 @@ test('getUpdates surfaces token auth failures', async () => {
   )
 })
 
+test('getUpdates surfaces rate limit failures', async () => {
+  await assert.rejects(
+    getUpdates('bot-token', {}, async () => ({
+      ok: false,
+      status: 429,
+      text: async () => 'Too Many Requests: retry after 5',
+    })),
+    /Telegram API getUpdates failed: 429 Too Many Requests: retry after 5/
+  )
+})
+
 test('getUpdates surfaces network errors from fetch', async () => {
   await assert.rejects(
     getUpdates('bot-token', {}, async () => {

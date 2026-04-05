@@ -105,8 +105,11 @@ async function main() {
 
       for (const update of updates) {
         await processUpdate(update, routing, CONFIG_PATH)
-        offset = Math.max(offset, Number(update.update_id) + 1)
-        saveCursor(offset)
+        const nextUpdateId = Number(update?.update_id)
+        if (Number.isFinite(nextUpdateId)) {
+          offset = Math.max(offset, nextUpdateId + 1)
+          saveCursor(offset)
+        }
       }
     } catch (error) {
       process.stderr.write(`telegram-gateway: ${error.message}\n`)

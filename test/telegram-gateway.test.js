@@ -151,3 +151,69 @@ test('main retries after poll failures and continues processing updates', async 
     value: { offset: 9 },
   }])
 })
+
+test('main ignores malformed updates and still advances cursor for later valid updates', async () => {
+  const dir = tempDir()
+  const stderr = []
+  const writes = []
+  const execCalls = []
+  const signalHandlers = {}
+
+  const { gateway, restore } = loadGatewayWithMocks({
+    dir,
+    overrides: {
+      loadTelegramConfig: () => ({ token: 'bot-token' }),
+      loadDeploymentConfig: () => ({ routing: { persistent_agent_channels: { coder: 'channel://code-status' } } }),
+      readJson: () => ({ offset: 0 }),
+      writeJson: (filePath, value) => {
+        writes.push({ filePath, value })
+      },
+      getUpdates: async () => {
+        signalHandlers.SIGTERM()
+        return [
+          { message: { text: 'missing chat and update id' } },
+          {
+            update_id: 8,
+            message: {
+              chat: { id: -1002, title: 'code-status' },
+              from: { id: 11, is_bot: false, username: 'tim' },
+              text: 'Ship it',
+            },
+          },
+        ]
+      },
+      resolveInboundTelegramMessage: () => ({
+        chat_name: 'code-status',
+        route: { agent: 'coder' },
+      }),
+      execFile: (command, args, callback) => {
+        execCalls.push({ command, args })
+        callback(null)
+      },
+      processOn: (signal, handler) => {
+        signalHandlers[signal] = handler
+        return process
+      },
+      stderrWrite: (chunk) => {
+        stderr.push(chunk)
+        return true
+      },
+    },
+  })
+
+  try {
+    await gateway.main()
+  } finally {
+    restore()
+  }
+
+  assert.equal(stderr.join(''), '')
+  assert.equal(execCalls.length, 1)
+  assert.equal(execCalls[0].command, 'node')
+  assert.equal(execCalls[0].args[1], 'coder')
+  assert.equal(execCalls[0].args[2], '[TELEGRAM #code-status] tim: Ship it')
+  assert.deepEqual(writes, [{
+    filePath: path.join(dir, 'telegram-cursor.json'),
+    value: { offset: 9 },
+  }])
+})
