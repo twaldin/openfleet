@@ -130,16 +130,34 @@ function fetchMessages(token, channelId, { after = null, limit = 50 } = {}) {
 }
 
 function postDirectDiscord(token, channel, message) {
-  const payload = JSON.stringify({ content: message })
-  execFileSync('curl', [
-    '-sS',
-    '-X', 'POST',
-    '-H', `Authorization: Bot ${token}`,
-    '-H', 'User-Agent: openfleet-local',
-    '-H', 'Content-Type: application/json',
-    '-d', payload,
-    `https://discord.com/api/v10/channels/${channel}/messages`,
-  ], { stdio: 'pipe', encoding: 'utf8' })
+  // Discord limit is 2000 chars — auto-split on line boundaries
+  const chunks = splitMessage(message, 1900)
+  for (const chunk of chunks) {
+    const payload = JSON.stringify({ content: chunk })
+    execFileSync('curl', [
+      '-sS',
+      '-X', 'POST',
+      '-H', `Authorization: Bot ${token}`,
+      '-H', 'User-Agent: openfleet-local',
+      '-H', 'Content-Type: application/json',
+      '-d', payload,
+      `https://discord.com/api/v10/channels/${channel}/messages`,
+    ], { stdio: 'pipe', encoding: 'utf8' })
+  }
+}
+
+function splitMessage(text, maxLen) {
+  if (text.length <= maxLen) return [text]
+  const chunks = []
+  let remaining = text
+  while (remaining.length > maxLen) {
+    let splitAt = remaining.lastIndexOf('\n', maxLen)
+    if (splitAt <= 0) splitAt = maxLen
+    chunks.push(remaining.slice(0, splitAt))
+    remaining = remaining.slice(splitAt).replace(/^\n/, '')
+  }
+  if (remaining) chunks.push(remaining)
+  return chunks
 }
 
 module.exports = {
