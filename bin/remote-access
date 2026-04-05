@@ -1,0 +1,146 @@
+#!/usr/bin/env node
+
+const os = require("node:os")
+const path = require("node:path")
+const { execFileSync } = require("node:child_process")
+
+const { ensureAuthToken } = require("../core/remote/config")
+const { parseArgs } = require("../lib/opencode")
+const { printQrIfPossible } = require("./init")
+
+function renderHelp() {
+  return `openfleet remote-access - Tailscale dashboard access
+
+Usage:
+  openfleet remote-access [--auth-key <key>] [--dashboard-port <port>] [--state-root <path>]
+
+Options:
+  --auth-key <key>         Tailscale auth key to use in setup guidance
+  --dashboard-port <port>  Dashboard port (default: 3000, or OPENFLEET_DASHBOARD_PORT)
+  --state-root <path>      State directory (default: ~/.openfleet)
+  --help, -h               Show this help message
+`
+}
+
+function buildSetupCommand(authKey) {
+  const key = authKey || "<tailscale-auth-key>"
+  return `sudo tailscale up --auth-key ${key}`
+}
+
+function readTailscaleIpv4({ execFileSyncImpl = execFileSync } = {}) {
+  const output = execFileSyncImpl("tailscale", ["ip", "-4"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+
+  return String(output)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || null
+}
+
+function isMissingBinary(error) {
+  return error && error.code === "ENOENT"
+}
+
+function runRemoteAccess({
+  authKey = null,
+  stateRoot = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet"),
+  dashboardPort = Number(process.env.OPENFLEET_DASHBOARD_PORT || 3000),
+  writeLine = console.log,
+  execFileSyncImpl = execFileSync,
+  ensureAuthTokenImpl = ensureAuthToken,
+  printQr = printQrIfPossible,
+} = {}) {
+  try {
+    execFileSyncImpl("tailscale", ["version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+  } catch (error) {
+    if (!isMissingBinary(error)) throw error
+
+    writeLine("Tailscale CLI not found.")
+    writeLine("Install Tailscale from https://tailscale.com/download")
+    writeLine(`Then run: ${buildSetupCommand(authKey)}`)
+
+    return {
+      ok: false,
+      reason: "tailscale-missing",
+      dashboardUrl: null,
+      tailscaleIp: null,
+    }
+  }
+
+  let tailscaleIp = null
+  try {
+    tailscaleIp = readTailscaleIpv4({ execFileSyncImpl })
+  } catch {
+    tailscaleIp = null
+  }
+
+  if (!tailscaleIp) {
+    writeLine("Tailscale is installed, but this machine does not have a Tailscale IPv4 yet.")
+    writeLine(`Run: ${buildSetupCommand(authKey)}`)
+    writeLine("Then re-run `openfleet remote-access`.")
+
+    return {
+      ok: false,
+      reason: "tailscale-not-connected",
+      dashboardUrl: null,
+      tailscaleIp: null,
+    }
+  }
+
+  const authToken = ensureAuthTokenImpl(stateRoot)
+  const dashboardUrl = `http://${tailscaleIp}:${dashboardPort}`
+
+  writeLine(`Tailscale IPv4: ${tailscaleIp}`)
+  writeLine(`Dashboard URL: ${dashboardUrl}`)
+  writeLine(`Dashboard auth token: ${authToken}`)
+  printQr(dashboardUrl, { authToken, writeLine })
+
+  return {
+    ok: true,
+    reason: null,
+    authToken,
+    dashboardUrl,
+    tailscaleIp,
+  }
+}
+
+function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv)
+  if (args.help || args.h) {
+    process.stdout.write(renderHelp())
+    return
+  }
+
+  const dashboardPort = Number(args["dashboard-port"] || process.env.OPENFLEET_DASHBOARD_PORT || 3000)
+  if (!Number.isFinite(dashboardPort) || dashboardPort <= 0) {
+    throw new Error("Dashboard port must be a positive number")
+  }
+
+  runRemoteAccess({
+    authKey: args["auth-key"] || null,
+    stateRoot: args["state-root"] || process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet"),
+    dashboardPort,
+  })
+}
+
+if (require.main === module) {
+  try {
+    main()
+  } catch (error) {
+    console.error(error.message)
+    process.exit(1)
+  }
+}
+
+module.exports = {
+  buildSetupCommand,
+  main,
+  readTailscaleIpv4,
+  renderHelp,
+  runRemoteAccess,
+}
