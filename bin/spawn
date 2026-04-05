@@ -136,76 +136,99 @@ async function main() {
     ], { stdio: "ignore", shell: true })
   }
 
+  // --- Wait for harness readiness ---
+  let opencodeSessionId = null
+
   if (harness === "openclaw") {
     if (hostName) {
       await waitForRemoteOpenClawHealth(getHost(hostName, hostsPath), openclawPort)
     } else {
       await waitForOpenClawHealth(openclawPort)
     }
-  } else if (harness === "opencode") {
-    // Poll tmux pane for TUI readiness — wait for input prompt to appear
-    const maxWait = 25000
+  } else if (!hostName && harness === "opencode" && opencodePort) {
+    // Poll HTTP server readiness (serve is headless, no TUI yet)
+    const maxWait = 20000
     const start = Date.now()
     let ready = false
     while (Date.now() - start < maxWait) {
       try {
-        const pane = capturePane(tmuxSession, name)
-        // OpenCode TUI shows these when ready for input
-        if (pane.includes("ctrl+p commands") || pane.includes("Ask anything")) {
-          ready = true
-          break
-        }
-      } catch { /* window not ready yet */ }
-      sleep(1000)
+        execFileSync("curl", ["--max-time", "1", "-fsS", `http://127.0.0.1:${opencodePort}/session`], { stdio: "pipe", encoding: "utf8" })
+        ready = true
+        break
+      } catch { sleep(1000) }
     }
     if (!ready) {
-      console.error(`Warning: OpenCode TUI not ready after ${maxWait/1000}s — bootstrap may fail`)
+      console.error(`Warning: OpenCode serve on port ${opencodePort} not ready after ${maxWait/1000}s`)
     }
-    // Small extra delay for input field to be fully active
-    sleep(1000)
-  } else {
-    // Claude Code / Codex — fixed wait
-    sleep(3000)
-  }
 
-  // Handle Codex trust prompt
-  if (harness === "codex") {
+    // Bootstrap via run --attach (creates a session, processes prompt, returns session ID)
+    if (bootstrap && ready) {
+      try {
+        const output = execFileSync("opencode", [
+          "run", "--attach", `http://127.0.0.1:${opencodePort}`,
+          "--dir", workdir, "--format", "json", bootstrap,
+        ], { encoding: "utf8", timeout: 120000, stdio: "pipe" })
+        // Extract session ID from JSON output
+        for (const line of output.split("\n")) {
+          try {
+            const evt = JSON.parse(line)
+            if (evt.sessionID) { opencodeSessionId = evt.sessionID; break }
+          } catch {}
+        }
+      } catch (e) {
+        console.error(`Warning: bootstrap via opencode run failed: ${e.message?.slice(0, 100)}`)
+      }
+    }
+
+    // Replace the serve-only window with attach --session (TUI shows full conversation)
+    if (opencodeSessionId) {
+      try { execFileSync("tmux", ["kill-window", "-t", `${tmuxSession}:${name}`], { stdio: "ignore" }) } catch {}
+      // Relaunch: serve in background + attach to the bootstrap session
+      const attachScript = `/tmp/openfleet-attach-${name}.sh`
+      fs.writeFileSync(attachScript, [
+        `#!/bin/bash`,
+        `export OPENFLEET_AGENT_NAME=${JSON.stringify(name)}`,
+        `export AGENT_NAME=${JSON.stringify(name)}`,
+        `opencode serve --port ${opencodePort} &`,
+        `sleep 3`,
+        `opencode attach http://127.0.0.1:${opencodePort} --session ${opencodeSessionId} --dir ${JSON.stringify(workdir)}`,
+        `sleep 86400`,
+      ].join("\n"), { mode: 0o755 })
+      execFileSync("tmux", [
+        "new-window", "-t", tmuxSession, "-n", name, "-c", workdir, attachScript,
+      ], { stdio: "ignore", shell: true })
+    }
+  } else if (harness === "codex") {
+    sleep(3000)
+    // Handle Codex trust prompt
     const pane = hostName
       ? runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxCaptureCommand({ tmuxSession, windowName: name }), { timeout: 5000 })
       : capturePane(tmuxSession, name)
     if (pane.includes("Do you trust")) {
       if (hostName) {
-        runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({ tmuxSession, windowName: name, message: "1" }), {
-          timeout: 15000,
-          stdio: "ignore",
-        })
+        runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({ tmuxSession, windowName: name, message: "1" }), { timeout: 15000, stdio: "ignore" })
       } else {
         execFileSync("tmux", ["send-keys", "-t", `${tmuxSession}:${name}`, "1", "Enter"], { stdio: "ignore" })
       }
       sleep(1500)
     }
+  } else {
+    // Claude Code / other — fixed wait + tmux bootstrap
+    sleep(3000)
   }
 
-  // Send bootstrap prompt
-  if (bootstrap) {
+  // Send bootstrap for non-OpenCode harnesses (OpenCode handled above via run --attach)
+  if (bootstrap && harness !== "opencode") {
     if (!hostName && harness === "openclaw" && openclawPort && openclawToken) {
       await sendMessage(openclawPort, openclawToken, bootstrap)
-    } else if (!hostName && harness === "opencode") {
-      // OpenCode: use tmux send-keys for bootstrap — shows in the TUI the user sees.
-      // (run --attach works but creates a separate session invisible in the TUI)
-      sendToPane(tmuxSession, name, bootstrap)
     } else if (hostName) {
       if (harness === "openclaw" && openclawPort && openclawToken) {
         runSshCommand(getHost(hostName, hostsPath), buildRemoteOpenClawMessageCommand({
-          port: openclawPort,
-          token: openclawToken,
-          message: bootstrap,
+          port: openclawPort, token: openclawToken, message: bootstrap,
         }), { timeout: 30000, stdio: "ignore" })
       } else {
         runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({
-          tmuxSession,
-          windowName: name,
-          message: bootstrap,
+          tmuxSession, windowName: name, message: bootstrap,
         }), { timeout: 30000, stdio: "ignore" })
       }
     } else {
@@ -230,6 +253,7 @@ async function main() {
     workspace: sessionWorkdir,
     worktree: worktreeInfo,
     opencode_port: opencodePort || null,
+    opencode_session_id: opencodeSessionId || null,
     openclaw_port: openclawPort || null,
     openclaw_token: openclawToken,
     host: hostName,

@@ -152,18 +152,15 @@ function buildHarnessLaunchCommand({ harness, model, workdir, name, token = null
       return { command: `${identityEnv} codex -m ${model} -C ${shellQuote(workdir)} --full-auto`, opencodePort: null }
     case "opencode": {
       const opencodePort = hashAgentPort(name)
-      // Write launch script to avoid nested shell quoting issues
+      // Serve-only launch script — bootstrap and attach happen after via API
       const scriptPath = `/tmp/openfleet-launch-${name}.sh`
       const fs = require("fs")
       fs.writeFileSync(scriptPath, [
         `#!/bin/bash`,
         `export OPENFLEET_AGENT_NAME=${JSON.stringify(name)}`,
         `export AGENT_NAME=${JSON.stringify(name)}`,
-        `opencode serve --port ${opencodePort} &`,
-        `sleep 6`,
-        `opencode attach http://127.0.0.1:${opencodePort} --dir ${JSON.stringify(workdir)}`,
-        `# Keep window alive if attach exits so spawn can retry`,
-        `sleep 86400`,
+        `# Serve headless — spawn script handles bootstrap + attach`,
+        `exec opencode serve --port ${opencodePort}`,
       ].join("\n"), { mode: 0o755 })
       return { command: scriptPath, opencodePort }
     }

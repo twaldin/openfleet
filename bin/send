@@ -130,8 +130,9 @@ async function routeMessage(session, message, {
     return { transport: "openclaw", port }
   }
 
-  if ((harness === "opencode" || harness === "claude-code" || harness === "codex") && tmuxSession && tmuxWindow && hasTmuxWindowImpl(tmuxSession, tmuxWindow)) {
-    // All TUI-based harnesses: use tmux send-keys so messages appear in the agent's active session
+  if (harness === "opencode" && tmuxSession && tmuxWindow && hasTmuxWindowImpl(tmuxSession, tmuxWindow)) {
+    // OpenCode: use tmux send-keys for follow-up messages (shows in the TUI)
+    // Bootstrap uses run --attach (in spawn), but follow-ups need tmux to appear in the active session
     sendTmuxImpl(tmuxSession, tmuxWindow, message)
     return { transport: "tmux", target: `${tmuxSession}:${tmuxWindow}` }
   }

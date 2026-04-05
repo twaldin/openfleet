@@ -75,14 +75,12 @@ test("buildHarnessLaunchCommand builds remote opencode launch command", () => {
     name: "ssh-coder",
   })
 
-  // Launch command is now a script file
+  // Launch command is a serve-only script (attach happens after bootstrap)
   assert.match(launch.command, /openfleet-launch-ssh-coder\.sh/)
   assert.equal(typeof launch.opencodePort, "number")
   const fs = require("fs")
   const script = fs.readFileSync(launch.command, "utf8")
   assert.match(script, /opencode serve --port/)
-  assert.match(script, /opencode attach http:\/\/127\.0\.0\.1:/)
-  assert.match(script, /openfleet\/workspaces\/ssh-coder/)
   assert.match(script, /OPENFLEET_AGENT_NAME/)
 })
 
