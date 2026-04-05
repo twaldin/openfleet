@@ -1,10 +1,18 @@
 const fs = require("fs")
+const os = require("os")
 const path = require("path")
 
 const NATIVE_SKILL_PATHS = {
   "claude-code": [".claude", "skills"],
   opencode: [".opencode", "skills"],
   openclaw: ["skills"],
+  codex: [".agents", "skills"],
+}
+
+const HARNESS_SCAN_PATHS = {
+  "claude-code": [".claude", "skills"],
+  opencode: [".opencode", "skills"],
+  openclaw: [".openclaw", "skills"],
   codex: [".agents", "skills"],
 }
 
@@ -54,6 +62,35 @@ function listSkills(root = skillsRoot()) {
     .filter((entry) => entry.isDirectory())
     .map((entry) => loadSkill(path.join(resolvedRoot, entry.name)))
     .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function scanHarnessSkills(options = {}) {
+  const homeDir = path.resolve(options.homeDir || os.homedir())
+  const onWarning = typeof options.onWarning === "function" ? options.onWarning : null
+  const scanned = []
+
+  for (const [harness, baseSegments] of Object.entries(HARNESS_SCAN_PATHS)) {
+    const baseDir = path.join(homeDir, ...baseSegments)
+    if (!fs.existsSync(baseDir)) continue
+
+    for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+
+      try {
+        const skill = loadSkill(path.join(baseDir, entry.name))
+        scanned.push({ ...skill, harness })
+      } catch (error) {
+        if (!onWarning) throw error
+        onWarning(`Skipping ${harness} skill ${entry.name}: ${error.message}`)
+      }
+    }
+  }
+
+  return scanned.sort((left, right) => {
+    const nameOrder = left.name.localeCompare(right.name)
+    if (nameOrder !== 0) return nameOrder
+    return left.harness.localeCompare(right.harness)
+  })
 }
 
 function projectSkill(skill, harness, workdir) {
@@ -108,6 +145,31 @@ function projectAllSkills(skillNames, harness, workdir, root = skillsRoot()) {
   return loadedSkills
 }
 
+function importSkillFromHarness(skillName, options = {}) {
+  if (typeof skillName !== "string" || !skillName.trim()) {
+    throw new Error("skillName is required")
+  }
+
+  const resolvedSkillsRoot = skillsRoot({ skillsRoot: options.skillsRoot })
+  const matches = scanHarnessSkills(options)
+    .filter((skill) => skill.name === skillName)
+    .filter((skill) => !options.harness || skill.harness === options.harness)
+
+  if (matches.length === 0) {
+    throw new Error(`Skill ${skillName} was not found in harness skill directories`)
+  }
+
+  if (matches.length > 1) {
+    throw new Error(`Skill ${skillName} is defined in multiple harness directories: ${matches.map((skill) => skill.harness).join(", ")}`)
+  }
+
+  const skill = matches[0]
+  const targetPath = path.join(resolvedSkillsRoot, skill.name, "SKILL.md")
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+  fs.copyFileSync(skill.path, targetPath)
+  return targetPath
+}
+
 function buildSkillIndex(skills) {
   if (!Array.isArray(skills) || skills.length === 0) return ""
 
@@ -156,9 +218,11 @@ function isMissingSkillError(error) {
 
 module.exports = {
   buildSkillIndex,
+  importSkillFromHarness,
   listSkills,
   loadSkill,
   projectAllSkills,
   projectSkill,
+  scanHarnessSkills,
   skillsRoot,
 }
