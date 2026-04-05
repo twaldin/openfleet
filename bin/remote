@@ -21,6 +21,7 @@ function main() {
       agent: args.agent || null,
       channelBinding: args['channel-binding'] || null,
       channelId: args['channel-id'] || null,
+      chatId: args['chat-id'] || null,
       configPath: args['config-path'] || null,
       guildLayoutPath: args['guild-layout-path'] || null,
     },
