@@ -168,11 +168,7 @@ function formatDiscordMessage(channelName, author, content, attachmentPaths) {
     }
   }
   const body = parts.join("\n") || "(empty)"
-  const channelId = config.channels?.[channelName]
-  const replyCmd = channelId
-    ? `node ${REMOTE_BIN} discord post --channel ${channelId} --message "<your reply>"`
-    : `node ${REMOTE_BIN} discord post --channel ${channelName} --message "<your reply>"`
-  return `[DISCORD #${channelName}] ${author}: ${body}\n(Reply via Discord: ${replyCmd})`
+  return `[${author}]: ${body}\n(Reply via: openfleet post "<your reply>")`
 }
 
 function sendToAgent(agentName, msg) {
@@ -645,7 +641,7 @@ client.on("messageCreate", (msg) => {
   } else {
     // Route to orchestrator/parent — handle attachments same as agent path
     const author = msg.author.username
-    const prefix = `[Discord #${channelName || channelId}] ${author}: `
+    const prefix = `[${author}]: `
 
     if (msg.attachments.size > 0) {
       downloadAttachments(msg).then(paths => {
