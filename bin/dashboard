@@ -143,6 +143,8 @@ function buildFleetAgents() {
   }
 
   for (const [name, session] of Object.entries(sessionByName)) {
+    // Skip if already added (e.g. orchestrator)
+    if (merged.some(a => a.name === name)) continue
     const alive = isAlive(session, name)
     merged.push({
       name,
