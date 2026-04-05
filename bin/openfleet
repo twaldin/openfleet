@@ -57,6 +57,7 @@ OPERATIONS
 
 SETUP
   init                Interactive setup wizard
+  remote-access       Tailscale dashboard access
   start               Cold-boot the fleet (tmux + infra + agents)
 
 HELP
@@ -114,6 +115,7 @@ const commands = {
 
   // Setup
   init: (args) => run("init", args),
+  "remote-access": (args) => run("remote-access", args),
   start: (args) => run("start", args),
 
   // Maintenance
