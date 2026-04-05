@@ -1,6 +1,5 @@
 const { buildDashboard, buildPresenceSurface, buildSummary, inspectAgent, listAgentMetadata } = require('./ops')
 const { listJobs, getJob } = require('./runtime/jobs')
-const { listTasks, getTask } = require('./runtime/tasks')
 
 function listTools() {
   return [
@@ -14,10 +13,6 @@ function listTools() {
       type: 'object',
       properties: { agent: { type: 'string' }, limit: { type: 'number' } },
       required: ['agent'],
-    }),
-    tool('openfleet_tasks', 'List tasks or fetch one task', {
-      type: 'object',
-      properties: { id: { type: 'string' } },
     }),
     tool('openfleet_jobs', 'List jobs or fetch one job', {
       type: 'object',
@@ -59,8 +54,6 @@ function callTool(stateRoot, name, args) {
       return resultJson(listAgentMetadata(stateRoot))
     case 'openfleet_agent_inspect':
       return resultJson(inspectAgent(stateRoot, args.agent, Number(args.limit || 20)))
-    case 'openfleet_tasks':
-      return resultJson(args.id ? getTask(stateRoot, args.id) : listTasks(stateRoot))
     case 'openfleet_jobs':
       return resultJson(args.id ? getJob(stateRoot, args.id) : listJobs(stateRoot))
     case 'openfleet_dashboard':

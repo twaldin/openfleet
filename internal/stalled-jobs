@@ -32,11 +32,7 @@ async function main() {
     if (!match) throw new Error(`No stalled job found for ${id}`)
 
     const sessionName = match.job.output?.execution?.session || match.metadata.name
-    const taskId = match.job.input?.task_id || match.job.input?.context?.task_id || null
-    const blockedHint = taskId
-      ? ` If you are blocked, run: node ${path.join(__dirname, '..', 'bin', 'task-state')} task update ${taskId} --status blocked --blocked-on "<reason>".`
-      : ''
-    const prompt = `SYSTEM: Your latest turn appears finished, but job ${match.job.id} is still in progress. If the work is complete, call report-completion now.${blockedHint} Otherwise continue the job immediately.`
+    const prompt = `SYSTEM: Your latest turn appears finished, but job ${match.job.id} is still in progress. If the work is complete, call report-completion now. Otherwise continue the job immediately.`
     const sendBin = path.join(__dirname, '..', 'bin', 'send')
     execFileSync('node', [sendBin, sessionName, '--message', prompt], { encoding: 'utf8' })
     process.stdout.write(JSON.stringify({ ok: true, nudged: id, session: sessionName }, null, 2) + '\n')

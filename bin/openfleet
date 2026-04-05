@@ -23,13 +23,12 @@ STATE
 WEB
   web-dashboard [--port N]  Web dashboard (default: 3000)
 
-TASKS
-  task <subcommand>   Task lifecycle (create, list, update, etc.)
+JOBS
   execute [args]      Execute a job
   spawn [args]        Spawn agents in any harness
   kill <name>         Kill tmux window openfleet:<name>
 
-JOBS
+JOB LIFECYCLE
   report-completion <job-id>  Report job completion
   complete <job-id>           Alias for report-completion
 
@@ -76,8 +75,7 @@ const commands = {
   watch: (args) => run("ops-ui", args),
   poll: (args) => run("discord-poll", args),
 
-  // Task management
-  task: (args) => run("task-state", args),
+  // Job execution
   execute: (args) => run("execute", args),
   spawn: (args) => run("spawn", args),
   attach: (args) => run("attach", args),

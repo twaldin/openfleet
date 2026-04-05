@@ -109,7 +109,7 @@ html, body {
   grid-template-rows: 1fr 280px;
   grid-template-areas:
     "sidebar pane pane"
-    "sidebar tasks events";
+    "sidebar events events";
   overflow: hidden;
   min-height: 0;
 }
@@ -411,16 +411,7 @@ html, body {
 .pane-input input:focus { border-color: var(--border-focus); }
 .pane-input input::placeholder { color: var(--text-dim); }
 
-/* Bottom row: tasks + events */
-.bottom-left {
-  grid-area: tasks;
-  border-top: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
+/* Bottom row: events */
 .bottom-right {
   grid-area: events;
   border-top: 1px solid var(--border);
@@ -429,66 +420,11 @@ html, body {
   overflow: hidden;
 }
 
-.task-list, .event-list {
+.event-list {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 0;
-}
-
-.task-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 16px;
-  font-size: 12px;
-  border-bottom: 1px solid rgba(48, 54, 61, 0.4);
-}
-
-.task-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.task-title {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 500;
-}
-
-.task-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.status-open { background: rgba(88, 166, 255, 0.15); color: var(--blue); }
-.status-in_progress { background: rgba(63, 185, 80, 0.18); color: var(--green); }
-.status-completed { background: rgba(139, 148, 158, 0.18); color: var(--text-muted); }
-.status-blocked { background: rgba(248, 81, 73, 0.18); color: var(--red); }
-
-.task-assignee,
-.task-blocked {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .event-item {
@@ -775,13 +711,7 @@ html, body {
       </div>
     </div>
 
-    <!-- Bottom left: tasks -->
-    <div class="bottom-left">
-      <div class="panel-header">Tasks <span class="count" id="task-count">0</span></div>
-      <div class="task-list" id="task-list"></div>
-    </div>
-
-    <!-- Bottom right: events -->
+    <!-- Bottom: events -->
     <div class="bottom-right">
       <div class="panel-header">Events</div>
       <div class="event-list" id="event-list"></div>
@@ -855,8 +785,6 @@ html, body {
   const $paneViewer = document.getElementById("pane-viewer");
   const $msgInput = document.getElementById("msg-input");
   const $msgSend = document.getElementById("msg-send");
-  const $taskList = document.getElementById("task-list");
-  const $taskCount = document.getElementById("task-count");
   const $eventList = document.getElementById("event-list");
   const $cronBar = document.getElementById("cron-bar");
   const $fleetStatus = document.getElementById("fleet-status");
@@ -1064,29 +992,6 @@ html, body {
         collapsible: true,
         expanded: showPastAgents,
       });
-    }
-  }
-
-  function renderTasks(data) {
-    const tasks = data.tasks || [];
-
-    $taskList.innerHTML = "";
-    $taskCount.textContent = tasks.length;
-
-    for (const task of tasks.slice(0, 30)) {
-      const el = document.createElement("div");
-      el.className = "task-item";
-      const statusClass = "status-" + String(task.status || "open").replace(/[^a-z0-9_]+/gi, "_");
-      el.innerHTML =
-        '<div class="task-header">' +
-          '<span class="task-title" title="' + esc(task.title || task.id) + '">' + esc(task.title || task.id) + '</span>' +
-          '<span class="status-badge ' + statusClass + '">' + esc(task.status || 'open') + '</span>' +
-        '</div>' +
-        '<div class="task-meta">' +
-          '<span class="task-assignee">assignee: ' + esc(task.assignee || 'unassigned') + '</span>' +
-          (task.blocked_on ? '<span class="task-blocked">blocked_on: ' + esc(task.blocked_on) + '</span>' : '') +
-        '</div>';
-      $taskList.appendChild(el);
     }
   }
 
@@ -1460,16 +1365,14 @@ html, body {
         renderAgents(data.agents || []);
         renderStatus(data);
       }),
-      apiFetchJson("/api/tasks").then(function(data) { renderTasks(data); }),
       apiFetchJson("/api/events").then(function(data) { renderEvents(data); }),
       apiFetchJson("/api/cron").then(function(data) { renderCron(data); }),
     ]).catch(function() {});
   }
 
-  // Refresh tasks/cron periodically (they don't come via SSE)
+  // Refresh cron periodically (doesn't come via SSE)
   setInterval(function() {
     if (!authToken) return;
-    apiFetchJson("/api/tasks").then(renderTasks).catch(function() {});
     apiFetchJson("/api/cron").then(renderCron).catch(function() {});
   }, 10000);
 

@@ -11,7 +11,6 @@ const { formatSchedule, loadConfig, loadCronState } = require("./cron")
 const { ensureAuthToken } = require("../core/remote/config")
 const { loadAgents } = require("../core/runtime/agents")
 const { loadRegistry } = require("../core/runtime/registry")
-const { listTasks } = require("../core/runtime/tasks")
 const { readEvents } = require("../core/runtime/events")
 
 const args = parseArgs(process.argv.slice(2))
@@ -179,10 +178,6 @@ function getFleetStatus() {
     uptime_ms: Date.now() - START_TIME,
     ...getAgentsData(),
   }
-}
-
-function getTasksData() {
-  return { tasks: listTasks(STATE_ROOT) }
 }
 
 function getEventsData() {
@@ -425,11 +420,6 @@ const server = http.createServer(async (req, res) => {
     // API: agents
     if (pathname === "/api/agents" && req.method === "GET") {
       return json(res, getAgentsData())
-    }
-
-    // API: tasks
-    if (pathname === "/api/tasks" && req.method === "GET") {
-      return json(res, getTasksData())
     }
 
     // API: events

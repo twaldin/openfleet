@@ -13,17 +13,6 @@ function renderOpsTui(stateRoot, options = {}) {
       : ['none']),
   ]
 
-  const tasks = [
-    'Tasks',
-    ...(dashboard.task_items.length
-      ? dashboard.task_items.slice(0, 6).map((task) => {
-          const details = [`status=${task.status || 'unknown'}`, `assignee=${task.assignee || '-'}`]
-          if (task.blocked_on) details.push(`blocked_on=${task.blocked_on}`)
-          return `${task.title} | ${details.join(' | ')}`
-        })
-      : ['none']),
-  ]
-
   const jobs = [
     'Jobs',
     ...(dashboard.in_progress_jobs.length
@@ -35,26 +24,16 @@ function renderOpsTui(stateRoot, options = {}) {
     `scheduled: ${dashboard.scheduled_jobs.length} | loops: ${dashboard.maintenance_loops.length}`,
   ]
 
-  const taskStatus = [
-    'Task Status',
-    `open: ${dashboard.tasks.open || 0}`,
-    `in_progress: ${dashboard.tasks.in_progress || 0}`,
-    `blocked: ${dashboard.tasks.blocked || 0}`,
-    `completed: ${dashboard.tasks.completed || 0}`,
-  ]
-
   const left = [
     box('OpenFleet Ops', [
       `updated ${dashboard.generated_at}`,
-      `counts agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs} tasks=${dashboard.counts.tasks}`,
+      `counts agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs}`,
     ], leftWidth),
     box(agents[0], agents.slice(1), leftWidth),
-    box(tasks[0], tasks.slice(1), leftWidth),
   ]
 
   const right = [
     box(jobs[0], jobs.slice(1), rightWidth),
-    box(taskStatus[0], taskStatus.slice(1), rightWidth),
     box('Keys', ['r refresh', 'q quit', 'use: ops-ui --once for snapshot'], rightWidth),
   ]
 

@@ -31,7 +31,6 @@ openfleet send fix-auth "Fix the failing auth test in src/auth.js"
 
 # 5. Inspect fleet state
 openfleet lifecycle status
-openfleet task list
 ```
 
 Detailed setup: [docs/getting-started.md](docs/getting-started.md)
@@ -47,11 +46,10 @@ From source, replace `openfleet ...` with `node bin/openfleet ...`.
 - Native `SKILL.md` skills with cross-harness projection. See [docs/skills.md](docs/skills.md).
 - OpenClaw adapter: bearer-token HTTP messaging and health checks.
 - SSH remote spawn: sync a workspace, bootstrap dependencies, and launch agents on another machine.
-- Web dashboard with bearer-token auth, live panes, task/event views, spawn/send controls, and token handoff via `openfleet auth qr`.
+- Web dashboard with bearer-token auth, live panes, event views, spawn/send controls, and token handoff via `openfleet auth qr`.
 - Discord gateway: inbound routing, channel/thread mapping, status boards, and permission escalation.
 - Cron scheduler: configurable overnight loops like briefings, news scans, compaction prompts, and dream-cycle jobs.
 - Permission auto-resolver: harness-aware prompt detection, safe auto-approve, orchestrator-first human escalation for risky requests.
-- Flat task system: `task create|list|update|show` backed by `tasks.json`.
 - Evaluator pipeline: treat PR review as a bounded evaluator job and dispatch it adversarially through the same fleet runtime.
 
 ## Supported Harnesses
@@ -106,7 +104,7 @@ More: [docs/skills.md](docs/skills.md)
       +---------------+   +---------------+   +---------------+
       | Fleet State   |   | Infra Windows |   | Remote Hosts  |
       | ~/.openfleet  |   | gateway       |   | SSH + rsync   |
-      | agents/tasks  |   | bridge        |   | tmux workers  |
+      | agents        |   | bridge        |   | tmux workers  |
       | jobs/events   |   | cron          |   +-------+-------+
       +-------+-------+   | dashboard     |           |
               |           | capture       |           |
@@ -238,8 +236,7 @@ STATE
 WEB
   web-dashboard [--port N]  Web dashboard (default: 3000)
 
-TASKS
-  task <subcommand>   Task lifecycle (create, list, update, etc.)
+JOBS
   execute [args]      Execute a job
   spawn [args]        Spawn agents in any harness
   kill <name>         Kill tmux window openfleet:<name>
@@ -288,11 +285,6 @@ openfleet spawn coder --harness codex --model gpt-5.4 --dir ~/src/my-repo --work
 openfleet host add thinkpad --ip 100.100.96.7 --user twaldin --ssh-key ~/.ssh/id_ed25519
 openfleet host setup thinkpad --harness opencode
 openfleet spawn remote-coder --harness opencode --model gpt-5.4 --dir ~/src/my-repo --host thinkpad
-
-# Tasks
-openfleet task create --title "Review auth PR" --assignee evaluator
-openfleet task update task_123 --status blocked --blocked-on "Need failing test case"
-openfleet task list
 
 # Dashboard auth
 openfleet auth show-token

@@ -6,7 +6,6 @@ const { loadRegistry } = require("./runtime/registry")
 const { loadSessionMetadata, sessionDir } = require("./runtime/session")
 const { readEvents } = require("./runtime/events")
 const { listJobs } = require("./runtime/jobs")
-const { listTasks } = require("./runtime/tasks")
 
 function defaultStateRoot() {
   return process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), ".openfleet")
@@ -147,11 +146,9 @@ module.exports = {
 function buildDashboard(stateRoot = defaultStateRoot()) {
   const agents = listAgentMetadata(stateRoot)
   const jobs = listJobs(stateRoot)
-  const tasks = listTasks(stateRoot)
 
   const enrichedAgents = agents.map((agent) => classifyAgent(agent, jobs))
 
-  const taskItems = tasks.map((task) => enrichTask(task, jobs, enrichedAgents))
   const scheduledJobs = jobs.filter((job) => Boolean(job.trigger))
   const maintenanceLoops = scheduledJobs.filter((job) => isMaintenanceLoop(job))
 
@@ -160,34 +157,13 @@ function buildDashboard(stateRoot = defaultStateRoot()) {
     counts: {
       agents: enrichedAgents.length,
       jobs: jobs.length,
-      tasks: tasks.length,
     },
     agents: enrichedAgents,
-    task_items: taskItems,
     jobs: summarizeByStatus(jobs),
-    tasks: summarizeByStatus(tasks),
     runnable_jobs: jobs.filter((item) => ["queued", "assigned"].includes(item.status)),
     in_progress_jobs: jobs.filter((item) => ["running", "dispatched"].includes(item.status)),
     scheduled_jobs: scheduledJobs,
     maintenance_loops: maintenanceLoops,
-  }
-}
-
-function enrichTask(task, jobs, agents = []) {
-  const relatedJobs = jobs.filter((job) => matchesTask(job, task.id))
-  const activeJob = relatedJobs.find((job) => ['running', 'dispatched', 'assigned', 'queued', 'blocked'].includes(job.status)) || null
-  const logicalOwner = task.assignee || activeJob?.agent || null
-  const workerAgent = logicalOwner
-    ? agents.find((agent) => agent.agent_id === logicalOwner || agent.name === logicalOwner)
-    : null
-  return {
-    ...task,
-    logical_owner: logicalOwner,
-    active_job_id: activeJob?.id || null,
-    active_agent: activeJob?.agent || null,
-    active_runtime_instance: workerAgent?.runtime_instance_id || null,
-    active_runtime_status: workerAgent?.runtime_state || null,
-    active_profile: activeJob?.input?.selected_profile || activeJob?.output?.selected_profile || null,
   }
 }
 
@@ -202,13 +178,12 @@ function summarizeByStatus(items) {
 
 function buildSummary(stateRoot = defaultStateRoot(), options = {}) {
   const dashboard = buildDashboard(stateRoot)
-  const scoped = scopeDashboard(dashboard, options)
   const lines = []
   lines.push(`OpenFleet summary @ ${dashboard.generated_at}`)
   if (options.agent || options.channelBinding) {
     lines.push(`Scope: agent=${options.agent || 'any'}, channel=${options.channelBinding || 'any'}`)
   }
-  lines.push(`Agents: ${dashboard.counts.agents} | Jobs: ${dashboard.counts.jobs} | Tasks: ${scoped.tasks.length}`)
+  lines.push(`Agents: ${dashboard.counts.agents} | Jobs: ${dashboard.counts.jobs}`)
 
   const activeAgents = dashboard.agents.map((a) => `${a.name}(${a.runtime_state}${a.host ? `/${a.host}` : ''})`).join(', ')
   lines.push(`Agents: ${activeAgents}`)
@@ -241,16 +216,6 @@ function buildSummary(stateRoot = defaultStateRoot(), options = {}) {
     }
   }
 
-  if (scoped.tasks.length) {
-    lines.push('Tasks:')
-    for (const task of scoped.tasks.slice(0, 5)) {
-      const details = [`status=${task.status || 'unknown'}`, `assignee=${task.assignee || '-'}`]
-      if (task.blocked_on) details.push(`blocked_on=${task.blocked_on}`)
-      if (task.active_runtime_instance) details.push(`instance=${task.active_runtime_instance}`)
-      lines.push(`- ${task.title} | ${details.join(' | ')}`)
-    }
-  }
-
   return lines.join('\n')
 }
 
@@ -258,7 +223,7 @@ function buildDashboardSurface(stateRoot = defaultStateRoot()) {
   const dashboard = buildDashboard(stateRoot)
   const lines = []
   lines.push(`OpenFleet dashboard @ ${dashboard.generated_at}`)
-  lines.push(`Counts: agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs} tasks=${dashboard.counts.tasks}`)
+  lines.push(`Counts: agents=${dashboard.counts.agents} jobs=${dashboard.counts.jobs}`)
   lines.push('')
   lines.push('Agent presence:')
   if (dashboard.agents.length) {
@@ -267,17 +232,6 @@ function buildDashboardSurface(stateRoot = defaultStateRoot()) {
     }
   } else {
     lines.push('- none')
-  }
-
-  if (dashboard.task_items.length) {
-    lines.push('')
-    lines.push('Tasks:')
-    for (const task of dashboard.task_items.slice(0, 5)) {
-      const details = [`status=${task.status || 'unknown'}`, `assignee=${task.assignee || '-'}`]
-      if (task.blocked_on) details.push(`blocked_on=${task.blocked_on}`)
-      if (task.active_runtime_instance) details.push(`instance=${task.active_runtime_instance}`)
-      lines.push(`- ${task.title} | ${details.join(' | ')}`)
-    }
   }
 
   if (dashboard.in_progress_jobs.length) {
@@ -357,14 +311,6 @@ function renderListSurface(items) {
     return lines.join('\n')
   }
 
-  if (items[0].id && Object.prototype.hasOwnProperty.call(items[0], 'title')) {
-    const lines = ['ID\tTITLE\tSTATUS\tASSIGNEE\tBLOCKED_ON\tUPDATED']
-    for (const item of items) {
-      lines.push(`${item.id}\t${item.title || '-'}\t${item.status || '-'}\t${item.assignee || '-'}\t${item.blocked_on || '-'}\t${item.updated_at || '-'}`)
-    }
-    return lines.join('\n')
-  }
-
   if (items[0].id && items[0].type && Object.prototype.hasOwnProperty.call(items[0], 'current_step')) {
     const lines = ['ID\tTYPE\tSTATUS\tSTEP\tUPDATED']
     for (const item of items) {
@@ -407,31 +353,11 @@ function isMaintenanceLoop(job) {
   return /maintenance|schedule|scheduler|cron/.test(trigger) || type.startsWith('monitor.') || type.startsWith('stock-monitor.')
 }
 
-function scopeDashboard(dashboard, options = {}) {
-  const agent = options.agent || null
-  const matches = (item, agentField) => {
-    if (agent && item?.[agentField] !== agent) return false
-    return true
-  }
-
-  return {
-    tasks: listOpenTasks(dashboard).filter((item) => matches(item, 'assignee')),
-  }
-}
-
 function describeScope(options = {}) {
   const parts = []
   if (options.agent) parts.push(`agent=${options.agent}`)
   if (options.channelBinding) parts.push(`@ ${options.channelBinding}`)
   return parts.length ? ` for ${parts.join(' ')}` : ''
-}
-
-function listOpenTasks(dashboard) {
-  return (dashboard.task_items || []).filter((task) => !['completed', 'done', 'cancelled', 'archived'].includes(task.status))
-}
-
-function matchesTask(job, taskId) {
-  return job?.input?.task_id === taskId || job?.input?.context?.task_id === taskId
 }
 
 function classifyAgent(agent, jobs) {
