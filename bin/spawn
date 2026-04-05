@@ -354,6 +354,8 @@ function sendToPane(session, window, message) {
   } else {
     execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "-l", message], { stdio: "ignore" })
   }
+  // Delay before Enter — long pastes need time to be processed by the TUI
+  sleep(message.length > 500 ? 3000 : 500)
   execFileSync("tmux", ["send-keys", "-t", `${session}:${window}`, "Enter"], { stdio: "ignore" })
 }
 
