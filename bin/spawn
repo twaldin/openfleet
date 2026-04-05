@@ -190,9 +190,21 @@ async function main() {
   if (bootstrap) {
     if (!hostName && harness === "openclaw" && openclawPort && openclawToken) {
       await sendMessage(openclawPort, openclawToken, bootstrap)
-    } else if (!hostName && harness === "opencode") {
-      // OpenCode: use tmux send-keys (reliable) — TUI API is racey during initialization
-      sendToPane(tmuxSession, name, bootstrap)
+    } else if (!hostName && harness === "opencode" && opencodePort) {
+      // OpenCode: use `opencode run --attach` to send bootstrap to running serve
+      // This is the official API — reliable, shows in TUI, handles long prompts
+      try {
+        execFileSync("opencode", [
+          "run", "--attach", `http://127.0.0.1:${opencodePort}`,
+          "--dir", workdir,
+          "--format", "json",
+          bootstrap,
+        ], { encoding: "utf8", timeout: 30000, stdio: "pipe" })
+      } catch (e) {
+        console.error(`Warning: opencode run --attach bootstrap failed: ${e.message?.slice(0, 100)}`)
+        // Fallback to tmux send-keys
+        sendToPane(tmuxSession, name, bootstrap)
+      }
     } else if (hostName) {
       if (harness === "openclaw" && openclawPort && openclawToken) {
         runSshCommand(getHost(hostName, hostsPath), buildRemoteOpenClawMessageCommand({
