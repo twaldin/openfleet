@@ -146,8 +146,17 @@ function buildHarnessLaunchCommand({ harness, model, workdir, name, token = null
   const identityEnv = `OPENFLEET_AGENT_NAME=${shellQuote(name)} AGENT_NAME=${shellQuote(name)}`
 
   switch (harness) {
-    case "claude-code":
-      return { command: `${identityEnv} claude --dangerously-skip-permissions --model ${model}`, opencodePort: null }
+    case "claude-code": {
+      const scriptPath = `/tmp/openfleet-launch-${name}.sh`
+      const fs = require("fs")
+      fs.writeFileSync(scriptPath, [
+        `#!/bin/bash`,
+        `export OPENFLEET_AGENT_NAME=${JSON.stringify(name)}`,
+        `export AGENT_NAME=${JSON.stringify(name)}`,
+        `exec claude --dangerously-skip-permissions --model ${model}`,
+      ].join("\n"), { mode: 0o755 })
+      return { command: scriptPath, opencodePort: null }
+    }
     case "codex":
       return { command: `${identityEnv} codex -m ${model} -C ${shellQuote(workdir)} --full-auto`, opencodePort: null }
     case "opencode": {

@@ -213,8 +213,25 @@ async function main() {
       sleep(1500)
     }
   } else {
-    // Claude Code / other — fixed wait + tmux bootstrap
-    sleep(3000)
+    // Claude Code / other — poll tmux pane for readiness
+    const maxWait = 20000
+    const start = Date.now()
+    let ready = false
+    while (Date.now() - start < maxWait) {
+      try {
+        const pane = capturePane(tmuxSession, name)
+        // Claude Code shows "❯" prompt when ready
+        if (pane.includes("❯") || pane.includes(">") || pane.includes("$")) {
+          ready = true
+          break
+        }
+      } catch {}
+      sleep(1000)
+    }
+    if (!ready) {
+      console.error(`Warning: ${harness} TUI not ready after ${maxWait/1000}s — bootstrap may fail`)
+    }
+    sleep(1000)
   }
 
   // Send bootstrap for non-OpenCode harnesses (OpenCode handled above via run --attach)
