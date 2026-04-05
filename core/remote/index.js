@@ -1,8 +1,9 @@
 const { postDiscord, resolveInboundDiscordMessage } = require('./discord')
+const { resolveInboundTelegramMessage } = require('./telegram')
 const { buildPresenceSurface, buildSummary } = require('../ops')
 
 function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers = {} }) {
-  if (adapter !== 'discord') {
+  if (adapter !== 'discord' && adapter !== 'telegram') {
     throw new Error(`Unsupported adapter: ${adapter}`)
   }
 
@@ -10,6 +11,9 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
   const source = args.source || 'openfleet'
 
   if (action === 'post') {
+    if (adapter !== 'discord') {
+      throw new Error(`Unsupported ${adapter} action: post`)
+    }
     return deliver({
       message: args.message,
       channel: args.channel,
@@ -19,6 +23,9 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
   }
 
   if (action === 'summary') {
+    if (adapter !== 'discord') {
+      throw new Error(`Unsupported ${adapter} action: summary`)
+    }
     return deliver({
       message: buildSummary(stateRoot, {
         agent: args.agent || null,
@@ -31,6 +38,9 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
   }
 
   if (action === 'presence') {
+    if (adapter !== 'discord') {
+      throw new Error(`Unsupported ${adapter} action: presence`)
+    }
     return deliver({
       message: buildPresenceSurface(stateRoot, {
         agent: args.agent || null,
@@ -42,6 +52,14 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
   }
 
   if (action === 'route-inbound') {
+    if (adapter === 'telegram') {
+      return resolveInboundTelegramMessage({
+        chatId: args.chatId || args.channelId,
+        routing: args.routing || {},
+        configPath: args.configPath,
+      })
+    }
+
     return resolveInboundDiscordMessage({
       channelId: args.channelId,
       routing: args.routing || {},
@@ -50,7 +68,7 @@ function executeRemoteAction({ adapter, action, stateRoot, args = {}, deliverers
     })
   }
 
-  throw new Error('Usage: remote discord <post|summary|presence|route-inbound> ...')
+  throw new Error(`Usage: remote ${adapter} <post|summary|presence|route-inbound> ...`)
 }
 
 module.exports = {

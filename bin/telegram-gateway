@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+
+const os = require('os')
+const path = require('path')
+const { execFile } = require('child_process')
+const { loadDeploymentConfig } = require('../core/deployment')
+const {
+  formatTelegramMessage,
+  getUpdates,
+  loadTelegramConfig,
+  parseTelegramUpdate,
+  resolveInboundTelegramMessage,
+  shouldProcessTelegramUpdate,
+} = require('../core/remote/telegram')
+const { readJson, writeJson } = require('../lib/opencode')
+
+const STATE_ROOT = process.env.OPENFLEET_CANONICAL_STATE_DIR || path.join(os.homedir(), '.openfleet')
+const CONFIG_PATH = process.env.OPENFLEET_TELEGRAM_CONFIG || path.join(STATE_ROOT, 'telegram.json')
+const CURSOR_PATH = path.join(STATE_ROOT, 'telegram-cursor.json')
+const SEND_BIN = path.resolve(__dirname, 'send')
+const POLL_TIMEOUT = parseInt(process.env.OPENFLEET_TELEGRAM_POLL_TIMEOUT || '30', 10)
+const RETRY_DELAY_MS = parseInt(process.env.OPENFLEET_TELEGRAM_RETRY_DELAY_MS || '2000', 10)
+
+function loadRouting() {
+  const deploymentPath = process.env.OPENFLEET_DEPLOYMENT
+  if (!deploymentPath) return {}
+  try {
+    return loadDeploymentConfig(deploymentPath).routing || {}
+  } catch (error) {
+    process.stderr.write(`telegram-gateway: failed to load deployment routing: ${error.message}\n`)
+    return {}
+  }
+}
+
+function loadCursor() {
+  return Number(readJson(CURSOR_PATH)?.offset || 0) || 0
+}
+
+function saveCursor(offset) {
+  writeJson(CURSOR_PATH, { offset })
+}
+
+function deliverToRoute(route, formatted) {
+  return new Promise((resolve) => {
+    const args = route.agent
+      ? [SEND_BIN, route.agent, formatted]
+      : [SEND_BIN, '--to-parent', '--sender', 'telegram', '--message', formatted]
+
+    execFile('node', args, (error) => {
+      if (!error || !route.agent) {
+        resolve()
+        return
+      }
+
+      process.stderr.write(`telegram-gateway: send to ${route.agent} failed, routing to parent\n`)
+      execFile('node', [SEND_BIN, '--to-parent', '--sender', 'telegram', '--message', formatted], () => resolve())
+    })
+  })
+}
+
+async function processUpdate(update, routing, configPath) {
+  if (!shouldProcessTelegramUpdate(update)) return
+
+  const parsed = parseTelegramUpdate(update)
+  let resolved
+  try {
+    resolved = resolveInboundTelegramMessage({
+      chatId: parsed.chat_id,
+      routing,
+      configPath,
+    })
+  } catch (error) {
+    process.stderr.write(`telegram-gateway: ${error.message}\n`)
+    return
+  }
+
+  const formatted = formatTelegramMessage(resolved.chat_name, parsed.sender_name, parsed.text)
+  await deliverToRoute(resolved.route, formatted)
+}
+
+async function main() {
+  const config = loadTelegramConfig(CONFIG_PATH)
+  if (!config?.token) {
+    process.stderr.write(`telegram-gateway: missing token in ${CONFIG_PATH}\n`)
+    process.exit(1)
+  }
+
+  const routing = loadRouting()
+  let offset = loadCursor()
+  let stopping = false
+
+  const stop = () => {
+    stopping = true
+  }
+
+  process.on('SIGINT', stop)
+  process.on('SIGTERM', stop)
+
+  while (!stopping) {
+    try {
+      const updates = await getUpdates(config.token, {
+        offset: offset || null,
+        timeout: POLL_TIMEOUT,
+      })
+
+      for (const update of updates) {
+        await processUpdate(update, routing, CONFIG_PATH)
+        offset = Math.max(offset, Number(update.update_id) + 1)
+        saveCursor(offset)
+      }
+    } catch (error) {
+      process.stderr.write(`telegram-gateway: ${error.message}\n`)
+      await sleep(RETRY_DELAY_MS)
+    }
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`telegram-gateway: ${error.message}\n`)
+    process.exit(1)
+  })
+}
+
+module.exports = {
+  deliverToRoute,
+  loadCursor,
+  loadRouting,
+  main,
+  processUpdate,
+  saveCursor,
+}
