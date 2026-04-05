@@ -5,8 +5,10 @@ const os = require('node:os')
 const path = require('node:path')
 
 const {
+  getUpdates,
   parseTelegramUpdate,
   resolveInboundTelegramMessage,
+  sendMessage,
   shouldProcessTelegramUpdate,
 } = require('../core/remote/telegram')
 const { executeRemoteAction } = require('../core/remote')
@@ -136,4 +138,51 @@ test('shouldProcessTelegramUpdate rejects bot, non-message, and empty-text updat
       chat: { id: 1 },
     },
   }), true)
+})
+
+test('sendMessage surfaces Telegram HTTP failures', async () => {
+  await assert.rejects(
+    sendMessage('bot-token', '-1002', 'Ship it', {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 500,
+        text: async () => 'gateway error',
+      }),
+    }),
+    /Telegram API sendMessage failed: 500 gateway error/
+  )
+})
+
+test('getUpdates surfaces Telegram API body failures', async () => {
+  await assert.rejects(
+    getUpdates('bot-token', {}, async () => ({
+      ok: true,
+      json: async () => ({
+        ok: false,
+        error_code: 400,
+        description: 'Bad Request: invalid offset',
+      }),
+    })),
+    /Telegram API getUpdates error:/
+  )
+})
+
+test('getUpdates surfaces token auth failures', async () => {
+  await assert.rejects(
+    getUpdates('bad-token', {}, async () => ({
+      ok: false,
+      status: 401,
+      text: async () => 'Unauthorized',
+    })),
+    /Telegram API getUpdates failed: 401 Unauthorized/
+  )
+})
+
+test('getUpdates surfaces network errors from fetch', async () => {
+  await assert.rejects(
+    getUpdates('bot-token', {}, async () => {
+      throw new Error('network down')
+    }),
+    /network down/
+  )
 })
