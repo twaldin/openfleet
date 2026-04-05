@@ -75,11 +75,15 @@ test("buildHarnessLaunchCommand builds remote opencode launch command", () => {
     name: "ssh-coder",
   })
 
-  assert.match(launch.command, /opencode serve --port/)
-  assert.match(launch.command, /opencode attach http:\/\/127\.0\.0\.1:/)
-  assert.match(launch.command, /openfleet\/workspaces\/ssh-coder/)
-  assert.match(launch.command, /OPENFLEET_AGENT_NAME='ssh-coder'/)
+  // Launch command is now a script file
+  assert.match(launch.command, /openfleet-launch-ssh-coder\.sh/)
   assert.equal(typeof launch.opencodePort, "number")
+  const fs = require("fs")
+  const script = fs.readFileSync(launch.command, "utf8")
+  assert.match(script, /opencode serve --port/)
+  assert.match(script, /opencode attach http:\/\/127\.0\.0\.1:/)
+  assert.match(script, /openfleet\/workspaces\/ssh-coder/)
+  assert.match(script, /OPENFLEET_AGENT_NAME/)
 })
 
 test("buildRemoteTmuxSpawnCommand creates remote tmux bootstrap command", () => {

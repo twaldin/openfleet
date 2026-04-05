@@ -142,25 +142,27 @@ async function main() {
     } else {
       await waitForOpenClawHealth(openclawPort)
     }
-  } else if (harness === "opencode" && opencodePort) {
-    // Poll for OpenCode serve readiness instead of fixed sleep
-    const maxWait = 20000
+  } else if (harness === "opencode") {
+    // Poll tmux pane for TUI readiness — wait for input prompt to appear
+    const maxWait = 25000
     const start = Date.now()
     let ready = false
     while (Date.now() - start < maxWait) {
       try {
-        execFileSync("curl", ["--max-time", "1", "-fsS", `http://127.0.0.1:${opencodePort}/tui/append-prompt`], { stdio: "ignore" })
-        ready = true
-        break
-      } catch {
-        sleep(1000)
-      }
+        const pane = capturePane(tmuxSession, name)
+        // OpenCode TUI shows these when ready for input
+        if (pane.includes("ctrl+p commands") || pane.includes("Ask anything")) {
+          ready = true
+          break
+        }
+      } catch { /* window not ready yet */ }
+      sleep(1000)
     }
     if (!ready) {
-      console.error(`Warning: OpenCode serve on port ${opencodePort} not ready after ${maxWait/1000}s — bootstrap may fail`)
+      console.error(`Warning: OpenCode TUI not ready after ${maxWait/1000}s — bootstrap may fail`)
     }
-    // Extra delay for TUI attach to fully initialize after serve is ready
-    sleep(3000)
+    // Small extra delay for input field to be fully active
+    sleep(1000)
   } else {
     // Claude Code / Codex — fixed wait
     sleep(3000)
@@ -188,21 +190,9 @@ async function main() {
   if (bootstrap) {
     if (!hostName && harness === "openclaw" && openclawPort && openclawToken) {
       await sendMessage(openclawPort, openclawToken, bootstrap)
-    } else if (!hostName && harness === "opencode" && opencodePort) {
-      // OpenCode: inject bootstrap via TUI API (append-prompt + submit-prompt)
-      try {
-        execFileSync("curl", [
-          "-sS", "-X", "POST", `http://127.0.0.1:${opencodePort}/tui/append-prompt`,
-          "-H", "Content-Type: application/json",
-          "-d", JSON.stringify({ text: bootstrap }),
-        ], { encoding: "utf8", timeout: 5000 })
-        sleep(500)
-        execFileSync("curl", [
-          "-sS", "-X", "POST", `http://127.0.0.1:${opencodePort}/tui/submit-prompt`,
-        ], { encoding: "utf8", timeout: 5000 })
-      } catch (e) {
-        console.error(`Warning: bootstrap via TUI API failed: ${e.message}`)
-      }
+    } else if (!hostName && harness === "opencode") {
+      // OpenCode: use tmux send-keys (reliable) — TUI API is racey during initialization
+      sendToPane(tmuxSession, name, bootstrap)
     } else if (hostName) {
       if (harness === "openclaw" && openclawPort && openclawToken) {
         runSshCommand(getHost(hostName, hostsPath), buildRemoteOpenClawMessageCommand({
@@ -278,9 +268,28 @@ async function main() {
 
 function createWorktree(repoDir, name, baseBranch) {
   const branch = `openfleet/${name}`
-  const worktreePath = path.join(os.tmpdir(), `openfleet-wt-${name}-${Date.now()}`)
+  // Use /tmp directly — os.tmpdir() on macOS returns paths with parentheses that break shell quoting
+  const worktreePath = `/tmp/openfleet-wt-${name}-${Date.now()}`
 
-  // Create branch from base
+  // Clean up any stale worktree for this branch first
+  try {
+    const worktrees = execFileSync("git", ["-C", repoDir, "worktree", "list", "--porcelain"], { encoding: "utf8" })
+    for (const block of worktrees.split("\n\n")) {
+      if (block.includes(`branch refs/heads/${branch}`)) {
+        const wtPath = block.split("\n")[0]?.replace("worktree ", "")
+        if (wtPath) {
+          execFileSync("git", ["-C", repoDir, "worktree", "remove", "--force", wtPath], { stdio: "ignore" })
+        }
+      }
+    }
+  } catch { /* no stale worktree */ }
+
+  // Prune any orphaned worktree refs
+  try {
+    execFileSync("git", ["-C", repoDir, "worktree", "prune"], { stdio: "ignore" })
+  } catch {}
+
+  // Delete stale branch (safe now that worktree is removed)
   try {
     execFileSync("git", ["-C", repoDir, "branch", "-D", branch], { stdio: "ignore" })
   } catch { /* branch didn't exist */ }
