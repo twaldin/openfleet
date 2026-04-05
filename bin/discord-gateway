@@ -331,6 +331,13 @@ async function pollPermissions() {
       }
     }
 
+    // Cascade: try orchestrator first, escalate to Discord if orchestrator can't resolve
+    try {
+      const msg = `[PERMISSION] Agent '${windowName}' needs permission to access: ${parsed.path || "(unknown)"}. Safety: risky. Approve via tmux send-keys or escalate to Discord #alerts.`
+      execFile("node", [SEND_BIN, "--to-parent", "--sender", "permission-resolver", "--message", msg], { timeout: 10000 }, () => {})
+      process.stderr.write(`openfleet-gateway: escalated risky permission to orchestrator for ${windowName}: ${parsed.path}\n`)
+    } catch {}
+
     const channelId = config.channels?.["alerts"] || agentToChannelId[windowName] || config.channels?.[windowName]
     if (!channelId) continue
 
