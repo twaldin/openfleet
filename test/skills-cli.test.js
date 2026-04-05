@@ -53,6 +53,38 @@ test("scanHarnessSkills finds skills across supported harness directories", () =
   )
 })
 
+test("scanHarnessSkills skips malformed SKILL.md files and warns", () => {
+  const homeDir = tempDir("openfleet-skills-home-")
+  const warnings = []
+  const { scanHarnessSkills } = require("../core/skills")
+
+  writeHarnessSkill(homeDir, [".opencode", "skills"], "valid-skill", "Valid skill")
+  fs.mkdirSync(path.join(homeDir, ".claude", "skills", "broken-skill"), { recursive: true })
+  fs.writeFileSync(path.join(homeDir, ".claude", "skills", "broken-skill", "SKILL.md"), "# Broken skill\n", "utf8")
+
+  const scanned = scanHarnessSkills({
+    homeDir,
+    onWarning: (message) => warnings.push(message),
+  })
+
+  assert.deepEqual(scanned.map((skill) => [skill.harness, skill.name]), [["opencode", "valid-skill"]])
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /broken-skill/)
+  assert.match(warnings[0], /frontmatter/i)
+})
+
+test("scanHarnessSkills returns an empty list for empty harness directories", () => {
+  const homeDir = tempDir("openfleet-skills-home-")
+  const { scanHarnessSkills } = require("../core/skills")
+
+  fs.mkdirSync(path.join(homeDir, ".claude", "skills"), { recursive: true })
+  fs.mkdirSync(path.join(homeDir, ".opencode", "skills"), { recursive: true })
+  fs.mkdirSync(path.join(homeDir, ".openclaw", "skills"), { recursive: true })
+  fs.mkdirSync(path.join(homeDir, ".agents", "skills"), { recursive: true })
+
+  assert.deepEqual(scanHarnessSkills({ homeDir }), [])
+})
+
 test("importSkillFromHarness copies SKILL.md into the repo skills root", () => {
   const homeDir = tempDir("openfleet-skills-home-")
   const repoSkillsRoot = tempDir("openfleet-skills-root-")
@@ -67,6 +99,20 @@ test("importSkillFromHarness copies SKILL.md into the repo skills root", () => {
 
   assert.equal(targetPath, path.join(repoSkillsRoot, "health-check", "SKILL.md"))
   assert.match(fs.readFileSync(targetPath, "utf8"), /description: Run a health check/)
+})
+
+test("importSkillFromHarness rejects duplicate skill names across harnesses", () => {
+  const homeDir = tempDir("openfleet-skills-home-")
+  const repoSkillsRoot = tempDir("openfleet-skills-root-")
+  const { importSkillFromHarness } = require("../core/skills")
+
+  writeHarnessSkill(homeDir, [".claude", "skills"], "health-check", "Claude skill")
+  writeHarnessSkill(homeDir, [".opencode", "skills"], "health-check", "OpenCode skill")
+
+  assert.throws(
+    () => importSkillFromHarness("health-check", { homeDir, skillsRoot: repoSkillsRoot }),
+    /multiple harness directories: claude-code, opencode/
+  )
 })
 
 test("skills CLI scan prints discovered harness skills", () => {
