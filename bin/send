@@ -130,11 +130,10 @@ async function routeMessage(session, message, {
     return { transport: "openclaw", port }
   }
 
-  if (harness === "opencode") {
-    const dir = (session.directory || session.workspace || path.join(stateRoot, "agents", targetName)).replace(/^~/, os.homedir())
-    const port = session.opencode_port || hashAgentPort(targetName)
-    sendViaOpencodeRun(dir, message, port, targetName)
-    return { transport: "opencode", port }
+  if ((harness === "opencode" || harness === "claude-code" || harness === "codex") && tmuxSession && tmuxWindow && hasTmuxWindowImpl(tmuxSession, tmuxWindow)) {
+    // All TUI-based harnesses: use tmux send-keys so messages appear in the agent's active session
+    sendTmuxImpl(tmuxSession, tmuxWindow, message)
+    return { transport: "tmux", target: `${tmuxSession}:${tmuxWindow}` }
   }
 
   if (tmuxSession && tmuxWindow && hasTmuxWindowImpl(tmuxSession, tmuxWindow)) {
