@@ -1,0 +1,98 @@
+#!/usr/bin/env node
+
+const { parseArgs } = require("../lib/opencode")
+const {
+  importSkillFromHarness,
+  listSkills,
+  scanHarnessSkills,
+  skillsRoot,
+} = require("../core/skills")
+
+function renderHelp() {
+  return `Usage: skills <list|scan|import> [args]
+
+Commands:
+  list                         Show repo skills and importable harness skills
+  scan                         Find skills in supported harness home directories
+  import <name>                Copy a harness skill into openfleet/skills
+
+Options:
+  --skills-root <path>         Override the OpenFleet skills root
+  --home <path>                Override the home directory used for scan/import
+  --source <harness>           Restrict import to one harness
+`
+}
+
+function printSkillList(title, skills, formatLine) {
+  process.stdout.write(`${title}:\n`)
+
+  if (skills.length === 0) {
+    process.stdout.write("(none)\n\n")
+    return
+  }
+
+  for (const skill of skills) {
+    process.stdout.write(`${formatLine(skill)}\n`)
+  }
+
+  process.stdout.write("\n")
+}
+
+function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv)
+  const [command, skillName] = args._
+  const resolvedSkillsRoot = skillsRoot({ skillsRoot: args["skills-root"] })
+  const scanOptions = {
+    homeDir: args.home,
+    onWarning: (message) => console.warn(message),
+  }
+
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    process.stdout.write(renderHelp())
+    return
+  }
+
+  if (command === "scan") {
+    const scanned = scanHarnessSkills(scanOptions)
+    printSkillList("Importable skills", scanned, (skill) => `- ${skill.name} [${skill.harness}]: ${skill.description}`)
+    return
+  }
+
+  if (command === "list") {
+    const localSkills = listSkills(resolvedSkillsRoot)
+    const scanned = scanHarnessSkills(scanOptions)
+
+    printSkillList("OpenFleet skills", localSkills, (skill) => `- ${skill.name}: ${skill.description}`)
+    printSkillList("Importable skills", scanned, (skill) => `- ${skill.name} [${skill.harness}]: ${skill.description}`)
+    return
+  }
+
+  if (command === "import") {
+    if (!skillName) {
+      throw new Error("Usage: skills import <name> [--source <harness>] [--skills-root <path>] [--home <path>]")
+    }
+
+    const targetPath = importSkillFromHarness(skillName, {
+      harness: args.source || args.harness,
+      homeDir: args.home,
+      skillsRoot: resolvedSkillsRoot,
+      onWarning: scanOptions.onWarning,
+    })
+    process.stdout.write(`Imported ${skillName} to ${targetPath}\n`)
+    return
+  }
+
+  throw new Error(`Unknown skills command: ${command}`)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(error.message)
+  process.exit(1)
+}
+
+module.exports = {
+  main,
+  renderHelp,
+}

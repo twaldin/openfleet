@@ -57,6 +57,7 @@ OPERATIONS
 
 SETUP
   init                Interactive setup wizard
+  skills [args]       Shared skill management
   start               Cold-boot the fleet (tmux + infra + agents)
 
 HELP
@@ -114,6 +115,7 @@ const commands = {
 
   // Setup
   init: (args) => run("init", args),
+  skills: (args) => run("skills", args),
   start: (args) => run("start", args),
 
   // Maintenance
