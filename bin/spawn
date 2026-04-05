@@ -142,9 +142,28 @@ async function main() {
     } else {
       await waitForOpenClawHealth(openclawPort)
     }
+  } else if (harness === "opencode" && opencodePort) {
+    // Poll for OpenCode serve readiness instead of fixed sleep
+    const maxWait = 20000
+    const start = Date.now()
+    let ready = false
+    while (Date.now() - start < maxWait) {
+      try {
+        execFileSync("curl", ["--max-time", "1", "-fsS", `http://127.0.0.1:${opencodePort}/tui/append-prompt`], { stdio: "ignore" })
+        ready = true
+        break
+      } catch {
+        sleep(1000)
+      }
+    }
+    if (!ready) {
+      console.error(`Warning: OpenCode serve on port ${opencodePort} not ready after ${maxWait/1000}s — bootstrap may fail`)
+    }
+    // Extra delay for TUI attach to fully initialize after serve is ready
+    sleep(3000)
   } else {
-    // Wait for CLI to initialize (opencode needs longer: serve start + attach)
-    sleep(harness === "opencode" ? 8000 : 3000)
+    // Claude Code / Codex — fixed wait
+    sleep(3000)
   }
 
   // Handle Codex trust prompt
