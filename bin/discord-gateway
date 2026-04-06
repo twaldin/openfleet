@@ -286,7 +286,7 @@ async function pollPermissions() {
       })
   } catch { return }
 
-  // Skip infrastructure windows and the orchestrator (has a human at the keyboard)
+  // Skip infrastructure windows, the orchestrator, and agents with bypass-permissions
   const SKIP_WINDOWS = new Set(["gateway", "cron", "dashboard", "bridge", "capture"])
   // Also skip the orchestrator — permission prompts there are interactive UI, not unattended agents
   const orchestratorWindow = (() => {
@@ -308,6 +308,11 @@ async function pollPermissions() {
     } catch { continue }
 
     const clean = paneText.replace(/\x1b\[[0-9;]*[mGKHFJABCDsuhlr]/g, "")
+
+    // Skip agents running with bypass-permissions — they never have real prompts
+    // and their output (e.g. "/P2/P3" position refs) triggers false positives
+    if (/bypass permissions on/i.test(clean)) continue
+
     const parsed = parsePermissionPrompt(clean, { agent: windowName })
     if (!parsed) continue
 
