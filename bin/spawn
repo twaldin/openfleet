@@ -199,18 +199,27 @@ async function main() {
       ], { stdio: "ignore", shell: true })
     }
   } else if (harness === "codex") {
-    sleep(3000)
+    // Poll for Codex readiness (trust prompt or input prompt)
+    const maxWait = 20000
+    const start = Date.now()
+    let pane = ""
+    while (Date.now() - start < maxWait) {
+      try {
+        pane = hostName
+          ? runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxCaptureCommand({ tmuxSession, windowName: name }), { timeout: 5000 })
+          : capturePane(tmuxSession, name)
+        if (pane.includes("Do you trust") || pane.includes("Implement") || pane.includes("›")) break
+      } catch {}
+      sleep(1000)
+    }
     // Handle Codex trust prompt
-    const pane = hostName
-      ? runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxCaptureCommand({ tmuxSession, windowName: name }), { timeout: 5000 })
-      : capturePane(tmuxSession, name)
     if (pane.includes("Do you trust")) {
       if (hostName) {
         runSshCommand(getHost(hostName, hostsPath), buildRemoteTmuxSendCommand({ tmuxSession, windowName: name, message: "1" }), { timeout: 15000, stdio: "ignore" })
       } else {
         execFileSync("tmux", ["send-keys", "-t", `${tmuxSession}:${name}`, "1", "Enter"], { stdio: "ignore" })
       }
-      sleep(1500)
+      sleep(3000)
     }
   } else {
     // Claude Code / other — poll tmux pane for readiness
