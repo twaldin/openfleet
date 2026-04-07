@@ -309,9 +309,9 @@ async function pollPermissions() {
 
     const clean = paneText.replace(/\x1b\[[0-9;]*[mGKHFJABCDsuhlr]/g, "")
 
-    // Skip agents running with bypass-permissions — they never have real prompts
-    // and their output (e.g. "/P2/P3" position refs) triggers false positives
-    if (/bypass permissions on/i.test(clean)) continue
+    // Skip agents running with bypass-permissions or full-auto — they never have real prompts
+    // and their output (e.g. "/P2/P3" position refs, "//" paths) triggers false positives
+    if (/bypass permissions on|full-auto|dangerously/i.test(clean)) continue
 
     const parsed = parsePermissionPrompt(clean, { agent: windowName })
     if (!parsed) continue
